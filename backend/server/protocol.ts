@@ -49,12 +49,12 @@ export interface Room {
     host: string;
     createdAt: number;
     thinking: boolean; // true while AI/computer is computing a move
-    difficulty?: "easy" | "medium" | "hard"; // computer mode only
+    difficulty?: "easy" | "medium" | "hard" | "insane"; // computer mode only
 }
 
 // Client events (from ARCHITECTURE §11)
 export interface ClientToServerEvents {
-    createRoom: (data: { mode: GameMode; difficulty?: "easy" | "medium" | "hard" }) => void;
+    createRoom: (data: { mode: GameMode; difficulty?: "easy" | "medium" | "hard" | "insane" }) => void;
     joinRoom: (data: { roomId: string; playerId?: string }) => void;
     move: (data: { roomId: string; destination: [number, number]; fromPosition?: [number, number] }) => void;
     useEffect: (data: { roomId: string; effect: "split" | "weaken" | "strengthen"; targetPosition: [number, number] }) => void;

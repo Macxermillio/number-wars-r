@@ -27,7 +27,7 @@ const computerPending = new Map<number, (move: ComputerMove | null, error?: stri
 let nextComputerMsgId = 1;
 let nextWorkerIndex = 0;
 
-export type ComputerDifficulty = "easy" | "medium" | "hard";
+export type ComputerDifficulty = "easy" | "medium" | "hard" | "insane";
 
 export interface ComputerMove {
     from: [number, number];
@@ -547,8 +547,7 @@ async function triggerComputerMove(room: Room) {
         }
 
         const rawDifficulty: string = (room as { difficulty?: string }).difficulty || "medium";
-        // Legacy clients may still send "insane" (removed) — play it as hard.
-        const difficulty: ComputerDifficulty = rawDifficulty === "insane" ? "hard" : (rawDifficulty as ComputerDifficulty);
+        const difficulty: ComputerDifficulty = rawDifficulty as ComputerDifficulty;
         console.log(`[computer] ${difficulty} bot thinking... (turn ${state.turnCount})`);
 
         // Ask a worker to pick a move (all difficulties run in the worker —
@@ -639,8 +638,7 @@ io.on("connection", (socket) => {
             // Computer/LLM modes: pre-seed the opponent's slot so the game
             // knows there are two seats (the AI/computer has no socket).
             if (mode === "computer") {
-                // Legacy clients may still send "insane" (removed) — map to hard.
-                room.difficulty = difficulty === ("insane" as ComputerDifficulty) ? "hard" : (difficulty || "medium");
+                room.difficulty = difficulty || "medium";
                 room.players.push({
                     playerId: `computer-${roomId}`,
                     socketId: null,

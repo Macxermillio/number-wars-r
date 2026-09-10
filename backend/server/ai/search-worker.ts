@@ -9,7 +9,7 @@ import { pickMinimaxMove } from "./minimax.ts";
 // posts back a move. Stateless: no rooms, no shared memory.
 // ============================================================================
 
-type Difficulty = "easy" | "medium" | "hard";
+type Difficulty = "easy" | "medium" | "hard" | "insane";
 
 // Message from main thread:
 // { id, state, difficulty, affiliation }
@@ -26,9 +26,9 @@ function chooseMove(state: gameState, difficulty: Difficulty, affiliation: "red"
         case "medium":
             return pickHeuristicMove(state, affiliation, difficulty === "easy" ? "easy" : "medium");
         case "hard":
-        default:
-            // Legacy "insane" rooms fall through here and play as hard.
             return pickMinimaxMove(state, affiliation, "hard");
+        case "insane":
+            return pickMinimaxMove(state, affiliation, "insane");
     }
 }
 

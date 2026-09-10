@@ -410,13 +410,26 @@ export function evaluateState(state: gameState, forAffiliation: "red" | "blue"):
         score -= (maxRow - Math.abs(p.position[1] - targetRow)) * 0.5;
     }
 
-    // Stars — the alternate win condition. Collecting 10 wins outright, so
-    // every star held is a meaningful lead (weighted heavily to pull the AI
-    // toward the contested center).
+    // Stars — the alternate win condition. Collecting starsToWin wins
+    // outright, so every star held is a meaningful lead (weighted heavily
+    // to pull the AI toward the contested center). Urgency scales as either
+    // side nears the win: a star that wins the game dwarfs all material.
     const myStars = forAffiliation === "red" ? state.redStars : state.blueStars;
     const theirStars = forAffiliation === "red" ? state.blueStars : state.redStars;
-    score += myStars * 400;
-    score -= theirStars * 400;
+    const starsToWin = state.starsToWin || 10;
+
+    // Terminal: star win decided.
+    if (myStars >= starsToWin) return 100000;
+    if (theirStars >= starsToWin) return -100000;
+
+    const myNeeded = starsToWin - myStars;
+    const theirNeeded = starsToWin - theirStars;
+    // One star away from winning: each held star + denying the enemy star
+    // matters enormously. Two away: still urgent. Otherwise base weight.
+    const myStarWeight = myNeeded <= 1 ? 5000 : myNeeded === 2 ? 1200 : 400;
+    const theirStarWeight = theirNeeded <= 1 ? 5000 : theirNeeded === 2 ? 1200 : 400;
+    score += myStars * myStarWeight;
+    score -= theirStars * theirStarWeight;
 
     // A star sitting on the board is a contested prize worth chasing.
     // Score the whole formation, not just the nearest piece: every piece
