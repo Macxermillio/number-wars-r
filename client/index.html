@@ -997,8 +997,15 @@
                     renderGame(state);
                     const done = animatePieceTransition(previousState, state);
                     if (done && typeof done.then === 'function') {
-                        done.then(resolve);
+                        done.then(() => {
+                            // The winning move has now finished animating —
+                            // only now show the win/lose overlay so the user
+                            // actually sees the final move land first.
+                            if (state.gameOver) showGameOverOverlay(state);
+                            resolve();
+                        });
                     } else {
+                        if (state.gameOver) showGameOverOverlay(state);
                         resolve();
                     }
                 }));
@@ -2124,6 +2131,9 @@
         }
 
         // ============ Turn Banner ============
+        // NOTE: the game-over overlay is NOT shown from here. It is triggered
+        // from the gameState handler AFTER the winning move finishes animating,
+        // so the user sees the final move land before the win/lose screen.
         function updateBanner(state) {
             const banner = document.getElementById('turn-banner');
             const turnText = document.getElementById('turn-text');
@@ -2140,7 +2150,6 @@
                         : 'w-10 h-10 rounded-2xl bg-gradient-to-b from-candy-coral to-candy-deepPink flex items-center justify-center shadow-pop-pink text-white text-lg';
                 }
                 banner.className = 'turn-banner gameover';
-                showGameOverOverlay(state);
                 return;
             }
 
