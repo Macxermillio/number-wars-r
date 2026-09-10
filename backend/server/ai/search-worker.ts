@@ -1,6 +1,6 @@
 import { parentPort, workerData } from "worker_threads";
 import type { gameState } from "../../assets/start.ts";
-import type { Move } from "./simulation.ts";
+import type { AiAction } from "./simulation.ts";
 import { pickHeuristicMove } from "./heuristic.ts";
 import { pickMinimaxMove } from "./minimax.ts";
 
@@ -20,7 +20,7 @@ interface WorkerRequest {
     affiliation: "red" | "blue";
 }
 
-function chooseMove(state: gameState, difficulty: Difficulty, affiliation: "red" | "blue"): Move | null {
+function chooseMove(state: gameState, difficulty: Difficulty, affiliation: "red" | "blue"): AiAction | null {
     switch (difficulty) {
         case "easy":
         case "medium":

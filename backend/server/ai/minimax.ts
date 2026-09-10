@@ -1,6 +1,6 @@
 import type { gameState } from "../../assets/start.ts";
-import type { Move } from "./simulation.ts";
-import { legalMoves, cloneState, applyMove, evaluateState, distToStarFocus } from "./simulation.ts";
+import type { AiAction } from "./simulation.ts";
+import { legalActions, cloneState, applyAction, evaluateState, distToStarFocus } from "./simulation.ts";
 
 // ============================================================================
 // Hard/Insane-mode Computer opponent: minimax search with alpha-beta pruning
@@ -14,6 +14,9 @@ import { legalMoves, cloneState, applyMove, evaluateState, distToStarFocus } fro
 // ============================================================================
 
 export type MinimaxDifficulty = "hard" | "insane";
+
+type CacheEntry = { depth: number; score: number };
+const transposition = new Map<string, CacheEntry>();
 
 const MAX_DEPTH: Record<MinimaxDifficulty, number> = {
     hard: 3,
@@ -35,11 +38,21 @@ function terminalScore(state: gameState, rootAffiliation: "red" | "blue"): numbe
     return null;
 }
 
+function stateKey(state: gameState): string {
+    const pieces = [...state.redPieces, ...state.bluePieces]
+        .map((p) => `${p.affiliation[0]}${p.position[0]},${p.position[1]}:${p.strength},${p.armor},${p.spike},${p.range}`)
+        .sort().join("|");
+    const terrain = Object.entries(state.board)
+        .filter(([, s]) => s.bricked || s.shard !== undefined || s.star === true)
+        .map(([k, s]) => `${k}:${s.bricked ? "b" : ""}${s.shard || ""}${s.star ? "s" : ""}`).join("|");
+    return `${state.turn}:${state.turnEffect}:${state.turnCount}:${state.redStars}:${state.blueStars}:${pieces}:${terrain}`;
+}
+
 // Does this move instantly win the game for `affiliation` (star win or
 // wiping the enemy)? Used for the insane instant-win pre-check.
-function moveWinsImmediately(state: gameState, mv: Move, affiliation: "red" | "blue"): boolean {
+function moveWinsImmediately(state: gameState, mv: AiAction, affiliation: "red" | "blue"): boolean {
     const sim = cloneState(state);
-    const res = applyMove(sim, mv);
+    const res = applyAction(sim, mv);
     if (res.error) return false;
     const score = terminalScore(sim, affiliation);
     return score !== null && score > 0;
@@ -50,7 +63,7 @@ function moveWinsImmediately(state: gameState, mv: Move, affiliation: "red" | "b
 // prune much more effectively. Insane mode massively up-weights a star
 // pickup that wins the game immediately, plus star denial when the enemy
 // is one star from winning.
-function orderMoves(state: gameState, moves: Move[], affiliation: "red" | "blue", difficulty: MinimaxDifficulty = "hard"): Move[] {
+function orderMoves(state: gameState, moves: AiAction[], affiliation: "red" | "blue", difficulty: MinimaxDifficulty = "hard"): AiAction[] {
     const starKey = (Object.entries(state.board) as [string, { star?: boolean }][]).find(([, sq]) => sq.star === true)?.[0];
     const starPos = starKey ? starKey.split(",").map(Number) as [number, number] : null;
     const starsToWin = state.starsToWin || 10;
@@ -60,6 +73,10 @@ function orderMoves(state: gameState, moves: Move[], affiliation: "red" | "blue"
     const enemyWinsWithStar = enemyStars + 1 >= starsToWin;
     const ranked = moves.map((mv) => {
         let score = 0;
+        if (mv.type !== "move") {
+            score += mv.type === "strengthen" ? 90 : mv.type === "weaken" ? 80 : 60;
+            return { mv, score };
+        }
         const to = state.board[`${mv.to[0]},${mv.to[1]}`];
         if (to?.tenant) {
             if (to.tenant.affiliation !== affiliation) score += 1000; // capture
@@ -91,8 +108,9 @@ function orderMoves(state: gameState, moves: Move[], affiliation: "red" | "blue"
     return ranked.map((r) => r.mv);
 }
 
-export function pickMinimaxMove(state: gameState, affiliation: "red" | "blue", difficulty: MinimaxDifficulty = "hard"): Move | null {
-    const moves = orderMoves(state, legalMoves(state, affiliation), affiliation, difficulty);
+export function pickMinimaxMove(state: gameState, affiliation: "red" | "blue", difficulty: MinimaxDifficulty = "hard"): AiAction | null {
+    if (difficulty === "insane" && transposition.size > 50000) transposition.clear();
+    const moves = orderMoves(state, legalActions(state, affiliation), affiliation, difficulty);
     if (moves.length === 0) return null;
 
     // Insane instant-win pre-check: if any legal move wins RIGHT NOW
@@ -109,13 +127,13 @@ export function pickMinimaxMove(state: gameState, affiliation: "red" | "blue", d
         if (moves.length > 24) moves.splice(24);
     }
 
-    let bestMove: Move | null = null;
+    let bestMove: AiAction | null = null;
     let bestScore = -Infinity;
     const depth = MAX_DEPTH[difficulty];
 
     for (const mv of moves) {
         const sim = cloneState(state);
-        const res = applyMove(sim, mv);
+        const res = applyAction(sim, mv);
         if (res.error) continue;
 
         const score = minimax(sim, depth - 1, -Infinity, Infinity, affiliation === "red" ? "blue" : "red", affiliation, difficulty);
@@ -147,8 +165,12 @@ function minimax(
         return evaluateState(state, rootAffiliation);
     }
 
+    const key = `${rootAffiliation}:${stateKey(state)}`;
+    const cached = transposition.get(key);
+    if (cached && cached.depth >= depth) return cached.score;
+
     const isMax = turnAffiliation === rootAffiliation;
-    let moves = orderMoves(state, legalMoves(state, turnAffiliation), turnAffiliation, difficulty);
+    let moves = orderMoves(state, legalActions(state, turnAffiliation), turnAffiliation, difficulty);
     if (moves.length === 0) {
         // No legal moves: evaluate as-is (very rare — pinned pieces; treated
         // as a pass).
@@ -165,7 +187,7 @@ function minimax(
     let best = isMax ? -Infinity : Infinity;
     for (const mv of moves) {
         const sim = cloneState(state);
-        const res = applyMove(sim, mv);
+        const res = applyAction(sim, mv);
         if (res.error) continue;
         const nextTurn = turnAffiliation === "red" ? "blue" : "red";
         const score = minimax(sim, depth - 1, alpha, beta, nextTurn, rootAffiliation, difficulty);
@@ -180,5 +202,6 @@ function minimax(
         if (beta <= alpha) break; // prune
     }
 
+    transposition.set(key, { depth, score: best });
     return best;
 }

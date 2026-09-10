@@ -110,7 +110,7 @@ function createInitialGameState(board: Board, redPieces: Piece[], bluePieces: Pi
         gameWinner: null,
         shardTurn: 5,
         shardSpawnsDone: 0,
-        maxShardSpawns: 20,
+        maxShardSpawns: 10,
         lastBrickTurn: -1,
         starTurn: 10,
         redStars: 0,

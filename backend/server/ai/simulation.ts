@@ -20,6 +20,10 @@ export type Move = {
     to: [number, number];
 };
 
+export type AiAction =
+    | { type: "move"; from: [number, number]; to: [number, number] }
+    | { type: "split" | "weaken" | "strengthen"; target: [number, number] };
+
 const dirsOrtho: [number, number][] = [[0, -1], [0, 1], [-1, 0], [1, 0]];
 const dirsDiag: [number, number][] = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
 
@@ -395,9 +399,15 @@ export function evaluateState(state: gameState, forAffiliation: "red" | "blue"):
 
     let score = 0;
 
+    // Mobility and tactical pressure are important in the shrinking board:
+    // a strong piece with no safe destinations is much less valuable.
+    const ownMoves = legalMoves(state, forAffiliation).length;
+    const enemyMoves = legalMoves(state, forAffiliation === "red" ? "blue" : "red").length;
+    score += (ownMoves - enemyMoves) * 1.5;
+
     // Material: strength + armor + spikes (each valued).
-    for (const p of ours) score += p.strength * 10 + p.armor * 3 + p.spike * 5;
-    for (const p of theirs) score -= p.strength * 10 + p.armor * 3 + p.spike * 5;
+    for (const p of ours) score += p.strength * 12 + p.armor * 4 + p.spike * 5 + p.range * 2;
+    for (const p of theirs) score -= p.strength * 12 + p.armor * 4 + p.spike * 5 + p.range * 2;
 
     // Positioning: being closer to the enemy zone / center is slightly better.
     for (const p of ours) {
@@ -462,4 +472,64 @@ export function evaluateState(state: gameState, forAffiliation: "red" | "blue"):
     }
 
     return score;
+}
+
+export function legalActions(state: gameState, affiliation: "red" | "blue"): AiAction[] {
+    const actions: AiAction[] = legalMoves(state, affiliation).map((move) => ({ type: "move", ...move }));
+    const pieces = affiliation === "red" ? state.redPieces : state.bluePieces;
+    if (state.turnEffect === "Split") {
+        for (const p of pieces) if (p.strength % 2 === 0) actions.push({ type: "split", target: [...p.position] });
+    } else if (state.turnEffect === "Weaken") {
+        for (const p of [...state.redPieces, ...state.bluePieces]) {
+            if (!(p.strength === 1 && p.armor === 1 && p.range === 1)) actions.push({ type: "weaken", target: [...p.position] });
+        }
+    } else if (state.turnEffect === "Strengthen") {
+        for (const p of [...state.redPieces, ...state.bluePieces]) if (p.strength < 8) actions.push({ type: "strengthen", target: [...p.position] });
+    }
+    return actions;
+}
+
+function advanceSearchTurn(state: gameState) {
+    state.turnCount += 1;
+    state.turn = state.turn === "red" ? "blue" : "red";
+    // Deterministic weighted approximation keeps searches reproducible while
+    // still allowing future branches to use different effects.
+    const roll = state.turnCount % 10;
+    state.turnEffect = roll < 3 ? "Merge" : roll < 6 ? "Split" : roll < 9 ? "Weaken" : "Strengthen";
+}
+
+export function applyAction(state: gameState, action: AiAction): { error?: string; result?: string } {
+    if (action.type === "move") return applyMove(state, action);
+    const key = `${action.target[0]},${action.target[1]}`;
+    const target = state.board[key]?.tenant;
+    if (!target) return { error: "No target piece" };
+    const own = target.affiliation === state.turn;
+    if (action.type === "split") {
+        if (!own || target.strength % 2 !== 0) return { error: "Cannot split target" };
+        const adjacent: [number, number][] = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]]
+            .map(([dc, dr]) => [target.position[0] + dc, target.position[1] + dr]);
+        const pos = adjacent.find(([c, r]) => {
+            const sq = state.board[`${c},${r}`];
+            return sq && !sq.bricked && !sq.occupied && sq.shard === undefined;
+        });
+        if (!pos) return { error: "No valid split square" };
+        const half = { strength: target.strength / 2, armor: Math.floor(target.armor / 2), spike: Math.floor(target.spike / 2), range: target.range / 2 };
+        target.strength = half.strength; target.armor = half.armor; target.spike = half.spike; target.range = half.range;
+        const copy = { ...target, position: pos as [number, number] };
+        state.board[`${pos[0]},${pos[1]}`]!.tenant = copy;
+        state.board[`${pos[0]},${pos[1]}`]!.occupied = true;
+        (target.affiliation === "red" ? state.redPieces : state.bluePieces).push(copy);
+    } else if (action.type === "weaken") {
+        target.strength = Math.max(1, target.strength - 1);
+        target.armor = Math.max(1, target.armor - 1);
+        target.range = Math.max(1, target.range - 1);
+    } else {
+        if (target.strength >= 8) return { error: "Cannot strengthen target" };
+        const gained = Math.min(8, target.strength * 2) - target.strength;
+        target.strength += gained;
+        target.armor = Math.max(0, target.armor - gained);
+        target.spike = Math.min(target.spike, maxSpikesForStrength(target.strength));
+    }
+    advanceSearchTurn(state);
+    return { result: action.type };
 }

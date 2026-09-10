@@ -16,6 +16,7 @@ import { Worker } from "worker_threads";
 import { cpus } from "os";
 import type { GameMode, Room, PlayerSlot } from "./protocol.ts";
 import { legalMoves } from "./ai/simulation.ts";
+import type { AiAction } from "./ai/simulation.ts";
 
 // --- Computer-opponent worker pool (ARCHITECTURE §4) ---
 // Stateless workers: receive a gameState + difficulty, return a move.
@@ -29,10 +30,7 @@ let nextWorkerIndex = 0;
 
 export type ComputerDifficulty = "easy" | "medium" | "hard" | "insane";
 
-export interface ComputerMove {
-    from: [number, number];
-    to: [number, number];
-}
+export type ComputerMove = AiAction;
 
 function initComputerWorkers() {
     if (computerWorkers.length > 0) return;
@@ -569,7 +567,7 @@ async function triggerComputerMove(room: Room) {
                 console.error("[computer] no legal move at all — leaving turn on red");
                 return;
             }
-            move = fb;
+            move = { type: "move", ...fb };
         }
 
         // The worker computed against the state as of the moment we started.
@@ -581,7 +579,10 @@ async function triggerComputerMove(room: Room) {
         }
 
         // Feed the move through the exact same turn pipeline as a human move.
-        const result = processMoveIntent(room, computerSlot.playerId, move.from[0], move.from[1], move.to[0], move.to[1]);
+        if (!move) return;
+        const result = move.type === "move"
+            ? processMoveIntent(room, computerSlot.playerId, move.from[0], move.from[1], move.to[0], move.to[1])
+            : processEffectIntent(room, computerSlot.playerId, move.type, move.target[0], move.target[1]);
         if (result.error) {
             // A worker move shouldn't be illegal, but if it is, fall back.
             console.error(`[computer] bot move rejected: ${result.error} — falling back to algorithmic random`);
