@@ -454,17 +454,9 @@ async function triggerAiMove(room: Room) {
                 return;
             }
 
-            // Validate the AI's move
-            const piece = findPieceByPosition(state, aiMove.from_col, aiMove.from_row, "red");
-            if (!piece) {
-                lastError = "No piece found at that position";
-                console.warn(`[AI] Invalid from position; attempt ${attempt}/${MAX_AI_MOVE_ATTEMPTS}`);
-                continue;
-            }
-
-            // Process the move through the pipeline
-            console.log(`[d] AI move attempt ${attempt}: ${aiMove.from_col},${aiMove.from_row} -> ${aiMove.to_col},${aiMove.to_row} (state.turn=${state.turn})`);
-            const result = processMoveIntent(room, aiSlot.playerId, aiMove.from_col, aiMove.from_row, aiMove.to_col, aiMove.to_row);
+            const result = aiMove.action === "move"
+                ? processMoveIntent(room, aiSlot.playerId, aiMove.from_col, aiMove.from_row, aiMove.to_col, aiMove.to_row)
+                : processEffectIntent(room, aiSlot.playerId, aiMove.action, aiMove.target_col, aiMove.target_row);
 
             if (result.error) {
                 // Illegal move — same as a human: nothing happens, we retry.

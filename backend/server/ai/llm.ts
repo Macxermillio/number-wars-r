@@ -1,4 +1,6 @@
 import OpenAI from "openai";
+import { cloneState, legalActions, applyAction } from "./simulation.ts";
+import type { AiAction } from "./simulation.ts";
 
 // LLM opponent for Number Wars
 // Follows the book-condenser pattern: AsyncOpenAI client with OpenRouter,
@@ -105,13 +107,18 @@ export function describeState(state: any): string {
 
     // Concrete legal move options — gives the model the board facts instead
     // of making it visualize the grid.
-    lines.push("\nYour legal options this turn (piece at (c,r) → destination):");
-    const options = computeLegalMoveOptions(state, "red");
+    lines.push("\nYour legal options this turn (choose exactly one):");
+    const options = legalActions(state, "red");
     if (options.length === 0) {
         lines.push("  (none — no legal move found)");
     } else {
         for (const o of options) {
-            lines.push(`  (${o.from[0]},${o.from[1]}) → (${o.to[0]},${o.to[1]})  [S=${o.strength}${o.capture ? ", CAPTURE" : ""}${o.merge ? ", MERGE" : ""}${o.star ? ", ⭐ STAR" : ""}${o.shard ? ", shard" : ""}]`);
+            if (o.type === "move") {
+                const square = state.board[`${o.to[0]},${o.to[1]}`];
+                lines.push(`  MOVE (${o.from[0]},${o.from[1]}) → (${o.to[0]},${o.to[1]})${square?.tenant ? ", CAPTURE/MERGE" : square?.star ? ", ⭐ STAR" : square?.shard ? ", SHARD" : ""}`);
+            } else {
+                lines.push(`  EFFECT ${o.type.toUpperCase()} target (${o.target[0]},${o.target[1]})`);
+            }
         }
     }
 
@@ -190,7 +197,7 @@ Movement:
 # Turn Structure
 Each turn has a random global effect:
 - Merge (30%): move onto an ALLY to combine them (implicit — no button).
-- Split (30%), Weaken (30%), Strengthen (10%): only usable via explicit activation; you may IGNORE the effect and just move instead. This prompt only asks you to move — you can never activate Split/Weaken/Strengthen yourself.
+- Split (30%), Weaken (30%), Strengthen (10%): usable through an explicit action, or you may IGNORE the effect and move instead.
 - You may ALWAYS ignore the turn effect and simply move a piece for repositioning.
 - CAPTURE is always legal on any turn — moving onto an enemy always resolves combat.
 
@@ -214,11 +221,10 @@ There are TWO ways to win:
 1. Eliminate all of the enemy's pieces (captured or killed by spikes). If mutual elimination is impossible, points (total value of enemy pieces you captured) decide the winner.
 2. ⭐ STAR COLLECTION — be the first to collect 10 stars. A star spawns every 10 turns in the center of the board (rows 4-10, especially the 7th row and the four center squares) and only one exists at a time. To collect it, a piece must LAND on the star's square. Stars do not block movement. Landing on a star is a strong alternative path to victory — especially when you're behind in pieces.
 
-# Your Move
-On your turn, choose ONE of your pieces to move and ONE valid destination.
-The game state message lists your LEGAL OPTIONS — pick one of those.
-Return ONLY valid JSON, no explanation, no markdown:
-{"from_col": N, "from_row": N, "to_col": N, "to_row": N}
+# Your Action
+Choose exactly one action from the legal-options list. Return ONLY valid JSON, no explanation, no markdown.
+Move: {"action":"move","from_col":N,"from_row":N,"to_col":N,"to_row":N}
+Effect: {"action":"split|weaken|strengthen","target_col":N,"target_row":N}
 
 STRATEGY:
 - Prefer captures you can win: your effective strength (S minus enemy spike damage) must beat their A+S+spikes. A tank with high armor beats a low attacker (you bounce off and lose nothing).
@@ -237,13 +243,19 @@ export interface AiMoveOptions {
     lastError?: string | undefined;
 }
 
+export type AiLlmAction =
+    | { action: "move"; from_col: number; from_row: number; to_col: number; to_row: number }
+    | { action: "split" | "weaken" | "strengthen"; target_col: number; target_row: number };
+
 // Call the LLM to get a move. Returns a promise with the chosen move or null.
-export async function getAiMove(state: any, opts: AiMoveOptions = {}): Promise<{ from_col: number; from_row: number; to_col: number; to_row: number } | null> {
+export async function getAiMove(state: any, opts: AiMoveOptions = {}): Promise<AiLlmAction | null> {
     if (!API_KEY) {
         console.warn("[LLM] No LLM_API_KEY set — AI opponent will make legal random moves");
-        return getRandomMove(state);
+        return getSafeFallback(state);
     }
 
+    const forced = findImmediateAiAction(state);
+    if (forced) return forced;
     const description = describeState(state);
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
         { role: "system", content: buildSystemPrompt() },
@@ -254,11 +266,11 @@ export async function getAiMove(state: any, opts: AiMoveOptions = {}): Promise<{
     if (opts.lastError) {
         messages.push({
             role: "assistant",
-            content: '{"from_col": 0, "from_row": 0, "to_col": 0, "to_row": 0}',
+            content: '{"action":"move","from_col":0,"from_row":0,"to_col":0,"to_row":0}',
         });
         messages.push({
             role: "user",
-            content: `Your previous move was rejected by the game server: "${opts.lastError}".\nChoose a move from the "Your legal options this turn" list in the game state. Return ONLY valid JSON: {"from_col": N, "from_row": N, "to_col": N, "to_row": N}`,
+            content: `Your previous action was rejected by the game server: "${opts.lastError}".\nChoose an action from the legal-options list. Return ONLY valid action JSON using the required schema.`,
         });
     }
 
@@ -287,26 +299,52 @@ export async function getAiMove(state: any, opts: AiMoveOptions = {}): Promise<{
             const parsed = JSON.parse(json);
 
             // Validate shape
-            if (typeof parsed.from_col === "number" && typeof parsed.from_row === "number" &&
-                typeof parsed.to_col === "number" && typeof parsed.to_row === "number") {
-                console.log(`[LLM] AI chooses: piece at (${parsed.from_col},${parsed.from_row}) → (${parsed.to_col},${parsed.to_row})`);
+            if (isValidShape(parsed)) {
+                console.log(`[LLM] AI chooses ${parsed.action}`);
                 return parsed;
             }
 
             // If invalid format, tell the LLM and retry
             messages.push({ role: "assistant", content });
-            messages.push({ role: "user", content: `Invalid format. Return ONLY: {"from_col": N, "from_row": N, "to_col": N, "to_row": N}` });
+            messages.push({ role: "user", content: `Invalid format. Return only a valid move or effect JSON action.` });
 
         } catch (err: any) {
             console.warn(`[LLM] Attempt ${attempt + 1} failed: ${err.message}`);
             if (attempt === MAX_RETRIES - 1) {
-                console.warn("[LLM] All retries exhausted, falling back to random move");
-                return getRandomMove(state);
+                return getSafeFallback(state);
             }
         }
     }
 
-    return getRandomMove(state);
+    return getSafeFallback(state);
+}
+
+function isValidShape(value: any): value is AiLlmAction {
+    if (value?.action === "move") return [value.from_col, value.from_row, value.to_col, value.to_row].every((n) => typeof n === "number");
+    return ["split", "weaken", "strengthen"].includes(value?.action) && typeof value.target_col === "number" && typeof value.target_row === "number";
+}
+
+function toLlmAction(action: AiAction): AiLlmAction {
+    return action.type === "move"
+        ? { action: "move", from_col: action.from[0], from_row: action.from[1], to_col: action.to[0], to_row: action.to[1] }
+        : { action: action.type, target_col: action.target[0], target_row: action.target[1] };
+}
+
+function findImmediateAiAction(state: any): AiLlmAction | null {
+    for (const action of legalActions(state, "red")) {
+        const sim = cloneState(state);
+        if (applyAction(sim, action).error) continue;
+        if (sim.redStars >= (sim.starsToWin || 10) || sim.bluePieces.length === 0) return toLlmAction(action);
+    }
+    return null;
+}
+
+function getSafeFallback(state: any): AiLlmAction | null {
+    const action = legalActions(state, "red").find((candidate) => {
+        const sim = cloneState(state);
+        return !applyAction(sim, candidate).error;
+    });
+    return action ? toLlmAction(action) : null;
 }
 
 // Fallback: pick a random LEGAL move. Never returns a move that the server
