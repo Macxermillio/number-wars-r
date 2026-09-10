@@ -5,7 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Number Wars</title>
     <script src="/config.js"></script>
-    <script src="/socket.io/socket.io.js"></script>
+    <!-- Socket.IO client library — loaded from the BACKEND so the version
+         always matches the server (socket.io 4.8.3). config.js defines
+         NW_CONFIG.BACKEND_URL (Railway); on localhost the fallback below
+         resolves to the same origin. -->
+    <script>
+        // Resolve the backend origin exactly like the connection code does.
+        var _backend = (window.NW_CONFIG && window.NW_CONFIG.BACKEND_URL)
+            ? window.NW_CONFIG.BACKEND_URL
+            : window.location.origin;
+        document.write('<script src="' + _backend + '/socket.io/socket.io.js"><\/script>');
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
     <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Quicksand:wght@500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Rubik:wght@500;600;700;800;900&display=swap" rel="stylesheet" />
