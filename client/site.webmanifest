@@ -1,0 +1,34 @@
+{
+  "name": "Number Wars",
+  "short_name": "Number Wars",
+  "description": "A turn-based strategy game on an evolving battlefield. Capture enemy pieces, merge your forces, and outmaneuver your opponent.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fdf7ff",
+  "theme_color": "#ff4b82",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "favicon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}

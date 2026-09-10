@@ -1,0 +1,32 @@
+{
+  "name": "number-wars",
+  "version": "1.0.0",
+  "description": "A real-time browser-based strategy game",
+  "license": "ISC",
+  "type": "module",
+  "main": "server/main.ts",
+  "scripts": {
+    "dev": "tsx index.ts",
+    "start": "node server/main.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.8",
+    "@types/cors": "^2.8.18",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.15.3",
+    "tsx": "^4.19.4",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^5.1.0",
+    "openai": "^4.98.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.3"
+  }
+}

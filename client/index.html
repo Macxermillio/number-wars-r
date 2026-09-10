@@ -1,0 +1,2294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Number Wars</title>
+    <script src="/config.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Quicksand:wght@500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Rubik:wght@500;600;700;800;900&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        fredoka: ['Fredoka', 'cursive', 'sans-serif'],
+                        quicksand: ['Quicksand', 'sans-serif'],
+                        display: ['Fredoka', 'Rubik', 'sans-serif'],
+                        body: ['Plus Jakarta Sans', 'sans-serif'],
+                    },
+                    colors: {
+                        candy: {
+                            pink: '#FF6EA7',
+                            deepPink: '#E8458B',
+                            coral: '#FF6B6B',
+                            mint: '#1DD1A1',
+                            softMint: '#E8FBF4',
+                            sky: '#38B6FF',
+                            deepSky: '#1A9BE6',
+                            lilac: '#A29BFE',
+                            purple: '#7D5FFF',
+                            yellow: '#FECA57',
+                            cream: '#FFF9F2',
+                            tileEnemy: '#FFE9EC',
+                            tilePlayer: '#EBF4FF',
+                            tileMid: '#F5F7FA',
+                        },
+                        "surface-dim": "#ded4ff",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-low": "#f7f1ff",
+                        "surface-container": "#f2ebff",
+                        "surface-container-high": "#ece4ff",
+                        "surface-container-highest": "#e7deff",
+                        "surface": "#fdf7ff",
+                        primary: "#b7044f",
+                        "primary-container": "#d92c67",
+                        secondary: "#765b00",
+                        "secondary-container": "#ffc703",
+                        tertiary: "#00657a",
+                        "tertiary-container": "#007f9a",
+                        "on-surface": "#1e0f4c",
+                        "on-surface-variant": "#5a4045",
+                        "outline-border": "#e1bec3"
+                    },
+                    boxShadow: {
+                        'pop': '0 6px 0 0 rgba(0,0,0,0.08), 0 12px 24px -4px rgba(0,0,0,0.06)',
+                        'pop-sm': '0 3px 0 0 rgba(0,0,0,0.08)',
+                        'pop-blue': '0 4px 0 0 #1880BD, 0 8px 16px -2px rgba(56, 182, 255, 0.35)',
+                        'pop-pink': '0 4px 0 0 #D03774, 0 8px 16px -2px rgba(255, 107, 107, 0.35)',
+                        'pop-green': '0 4px 0 0 #109E79, 0 8px 16px -2px rgba(29, 209, 161, 0.35)',
+                        'pop-purple': '0 4px 0 0 #5E3EE6',
+                        'candy-pink': '0 10px 0px 0px #f43f5e, 0 16px 28px -4px rgba(244, 63, 94, 0.35)',
+                        'candy-cyan': '0 10px 0px 0px #06b6d4, 0 16px 28px -4px rgba(6, 182, 212, 0.35)',
+                        'candy-yellow': '0 10px 0px 0px #f59e0b, 0 16px 28px -4px rgba(245, 158, 11, 0.35)',
+                        'candy-pink-sm': '0 4px 0px 0px #e11d48',
+                        'candy-cyan-sm': '0 4px 0px 0px #0891b2',
+                        'bubble-btn': '0 5px 0px 0px #be123c, 0 8px 16px rgba(225, 29, 72, 0.3)'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* ============ Arcade base + game hooks (IDs/classes kept for client JS) ============ */
+        *, *::before, *::after { box-sizing: border-box; }
+        body {
+            background-color: #fcf8ff;
+            background-image:
+                radial-gradient(#d8b4fe 1.5px, transparent 1.5px),
+                radial-gradient(#fed7aa 1.5px, transparent 1.5px);
+            background-size: 36px 36px;
+            background-position: 0 0, 18px 18px;
+            overscroll-behavior: none;
+        }
+        .border-3 { border-width: 3px; }
+        /* Rules modal */
+        #rules-modal { backdrop-filter: blur(6px); }
+        #rules-modal .rules-scroll::-webkit-scrollbar { width: 8px; }
+        #rules-modal .rules-scroll::-webkit-scrollbar-thumb { background: #e9d5ff; border-radius: 8px; }
+        .rule-step { transition: transform 0.15s ease; }
+        .rule-step:hover { transform: translateY(-2px); }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.96); box-shadow: 0 0 0 0 rgba(254, 202, 87, 0.8); }
+            70% { transform: scale(1.02); box-shadow: 0 0 0 10px rgba(254, 202, 87, 0); }
+            100% { transform: scale(0.96); box-shadow: 0 0 0 0 rgba(254, 202, 87, 0); }
+        }
+        .pulse-selected { animation: pulse-ring 2s infinite ease-in-out; }
+
+        /* Board grid: 16 cols x 13 rows (authoritative size) */
+        .board-grid {
+            display: grid;
+            position: relative;
+            grid-template-columns: repeat(16, minmax(0, 1fr));
+            grid-template-rows: repeat(13, minmax(0, 1fr));
+            gap: 3px;
+            overflow: hidden;
+        }
+        .cell {
+            border-radius: 0.65rem;
+            display: flex;
+            align-items: stretch;
+            justify-content: stretch;
+            position: relative;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+            padding: 0;
+            transition: background 0.15s, transform 0.15s;
+        }
+        .cell.zone-blue { background: #D6E9FF; border: 2px solid #7FB8F5; box-shadow: inset 0 1px 0 rgba(255,255,255,0.7); }
+        .cell.zone-neutral { background: #FFFFFF; border: 2px solid #B6C2D2; box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 1px 2px rgba(15,23,42,0.08); }
+        .cell.zone-red { background: #FFDDE2; border: 2px solid #F49AA6; box-shadow: inset 0 1px 0 rgba(255,255,255,0.7); }
+        .cell.valid-move {
+            background: #E0F2FE !important;
+            border: 2px dashed #38B6FF !important;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+        }
+        .cell.valid-move::after {
+            content: "";
+            width: 14px; height: 14px;
+            border-radius: 9999px;
+            background: #38B6FF;
+        }
+        .cell.valid-move:hover { background: #BAE6FD !important; }
+        .cell.brick {
+            background: transparent !important;
+            background-image: none !important;
+            border: none !important;
+            align-items: center; justify-content: center;
+        }
+        .cell.brick::after { content: "🧱"; font-size: clamp(2rem, 3.5vw, 3rem); line-height: 1; opacity: 1; }
+        .cell.shard-armor { background: #DBEAFE !important; border-color: #38B6FF !important; }
+        .cell.shard-armor::after { content: "🛡️"; font-size: 0.7rem; position: absolute; bottom: 1px; right: 3px; }
+        .cell.shard-spike { background: #FEF3C7 !important; border-color: #761909db !important; }
+        .cell.shard-spike::after { content: "⚡"; font-size: 0.9rem; position: absolute; bottom: 1px; right: 3px; }
+        .cell.star { background: #FFF8DC !important; border-color: #F5B700 !important; }
+        .cell.star::after { content: "⭐"; font-size: clamp(1.2rem, 2vw, 1.8rem); position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+
+        /* Pieces — arcade candy tiles. JS toggles .selected / .merge-target / .effect-target */
+        .piece {
+            width: 100%; height: 100%; box-sizing: border-box;
+            flex: none;
+            min-height: 0; min-width: 0;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 0;
+            border-radius: 0.5rem;
+            padding: 1px;
+            position: relative;
+            line-height: 1;
+            cursor: pointer;
+            transition: transform 0.12s;
+            font-family: Fredoka, Quicksand, sans-serif;
+            overflow: hidden;
+        }
+        .piece:hover { transform: scale(1.05); }
+        .piece.blue {
+            background: linear-gradient(to bottom, #38B6FF, #1A9BE6);
+            color: #fff;
+            box-shadow: 0 4px 0 0 #1880BD, 0 8px 16px -2px rgba(56,182,255,0.35);
+        }
+        .piece.red {
+            background: linear-gradient(to bottom, #FF6B6B, #E8458B);
+            color: #fff;
+            box-shadow: 0 4px 0 0 #D03774, 0 8px 16px -2px rgba(255,107,107,0.35);
+        }
+        .piece.selected {
+            outline: 3px solid #FECA57;
+            animation: pulse-ring 2s infinite ease-in-out;
+        }
+        /* Yellow halo marks a piece you can legally land ON this turn —
+           a merge target (ally) or a capture target (enemy). The glow is
+           drawn INSET because .cell clips anything outside the piece. */
+        .piece.landing-target {
+            animation: landing-halo 1.1s ease-in-out infinite;
+            cursor: pointer;
+        }
+        @keyframes landing-halo {
+            0%, 100% { box-shadow: inset 0 0 0 3px #FECA57, inset 0 0 6px 2px rgba(254, 202, 87, 0.75); }
+            50% { box-shadow: inset 0 0 0 3px #FFD966, inset 0 0 18px 7px rgba(254, 202, 87, 1); }
+        }
+        .piece.effect-target {
+            box-shadow: 0 0 8px 2px rgba(250,204,21,0.65), inset 0 0 8px 1px rgba(250,204,21,0.35);
+        }
+        .piece > * { min-height: 0; min-width: 0; }
+        /* Slim tile: spike badge on top, strength + small green range in the
+           middle, armor below. Range sits to the right of strength. */
+        .piece .str { order: 2; display: flex; align-items: baseline; justify-content: center; gap: 3px; font-size: clamp(1rem, 1.6vw, 1.7rem); font-weight: 700; text-align: center; line-height: 1; text-shadow: 0 2px 3px rgba(0,0,0,0.35); white-space: nowrap; padding: 0; margin: 0; }
+        .piece .str .snum { font-size: 1em; line-height: 1; }
+        .piece .str .rng { font-size: 0.62rem; font-weight: 800; line-height: 1; color: #86EFAC; text-shadow: 0 1px 3px rgba(0,0,0,0.85); letter-spacing: 0.2px; transform: translateY(-0.55em); }
+        .piece .armor { order: 3; display: block; max-width: 100%; font-size: 0.62rem; font-weight: 800; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: none; border-radius: 0; padding: 0; line-height: 1.5; text-shadow: 0 1px 3px rgba(0,0,0,0.8); letter-spacing: 0.2px; margin: 0; }
+        .piece .prow { order: 1; display: flex; justify-content: center; align-items: center; width: 100%; max-width: 100%; min-height: 0.7em; font-size: 0.6rem; font-weight: 800; line-height: 1.2; white-space: nowrap; padding: 0; margin: 0; pointer-events: none; }
+        .piece .prow > span { background: none; border-radius: 0; padding: 0; text-shadow: 0 1px 3px rgba(0,0,0,0.8); letter-spacing: 0.2px; white-space: nowrap; line-height: 1.2; flex: 0 0 auto; }
+        .piece .prow .spike { color: #FFE873; }
+        .piece.movement-clone {
+            position: absolute;
+            z-index: 10;
+            pointer-events: none;
+            transition: transform 180ms ease-in-out;
+        }
+        .piece.movement-arrival-hidden { visibility: hidden; }
+        .piece.combat-hit { animation: combat-hit 420ms ease-in-out 2; }
+        @keyframes combat-hit {
+            0%, 100% { filter: brightness(1); transform: translateX(0); }
+            25% { filter: brightness(2); transform: translateX(-3px); }
+            50% { filter: brightness(1.4); transform: translateX(3px); }
+            75% { filter: brightness(2); transform: translateX(-2px); }
+        }
+
+        /* Turn status / thinking / banners — class names kept, arcade skin */
+        .turn-status {
+            display: none;
+            margin-bottom: 8px;
+            padding: 10px 16px;
+            border-radius: 1rem;
+            font-weight: 700;
+            font-size: 0.95rem;
+            text-align: center;
+            font-family: Fredoka, sans-serif;
+        }
+        .turn-status.your-turn { display: block; color: #fff; background: linear-gradient(to right, #34D399, #1DD1A1); border: 2px solid #6EE7B7; box-shadow: 0 4px 0 0 #109E79; }
+        .turn-status.opponent-turn { display: block; color: #64748B; background: #F1F5F9; border: 2px solid #E2E8F0; }
+        .thinking-indicator { display: none; text-align: center; padding: 8px; color: #94A3B8; font-size: 0.85rem; font-family: Fredoka, sans-serif; }
+        .thinking-indicator.active { display: block; }
+
+        .turn-banner { padding: 12px; border-radius: 1rem; text-align: center; font-weight: 600; font-size: 1rem; font-family: Fredoka, sans-serif; }
+        .turn-banner.blue { background: linear-gradient(to bottom right, #fff, #EFF6FF); color: #1A9BE6; border: 2px solid #BFDBFE; }
+        .turn-banner.red { background: linear-gradient(to bottom right, #fff, #FFF1F2); color: #E8458B; border: 2px solid #FECDD3; }
+        .turn-banner.gameover { background: #F1F5F9; color: #475569; border: 2px solid #E2E8F0; }
+        .turn-effect { font-size: 0.8rem; opacity: 0.8; margin-top: 4px; font-family: Quicksand, sans-serif; }
+
+        /* ---- Win / Lose full-screen overlay ---- */
+        #game-over-overlay {
+            position: fixed; inset: 0; z-index: 9999;
+            display: none; align-items: center; justify-content: center;
+            background: rgba(15, 23, 42, 0.72);
+            backdrop-filter: blur(4px);
+            padding: 24px;
+        }
+        #game-over-overlay.show { display: flex; }
+        #game-over-overlay .result-card {
+            text-align: center;
+            animation: result-pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+        }
+        #game-over-overlay .result-card .flair {
+            font-size: clamp(2.5rem, 8vw, 5rem);
+            letter-spacing: 0.1em;
+            line-height: 1;
+        }
+        #game-over-overlay .result-card .title {
+            font-family: Fredoka, sans-serif;
+            font-weight: 800;
+            font-size: clamp(3rem, 12vw, 8rem);
+            line-height: 1.05;
+            text-shadow: 0 4px 0 rgba(0,0,0,0.25), 0 0 40px currentColor;
+            margin: 8px 0 4px;
+        }
+        #game-over-overlay .result-card .subtitle {
+            font-family: Quicksand, sans-serif;
+            font-size: clamp(0.9rem, 2.5vw, 1.3rem);
+            font-weight: 700;
+            color: rgba(255,255,255,0.9);
+        }
+        #game-over-overlay.win .title { color: #FFD400; }
+        #game-over-overlay.lose .title { color: #3B82F6; }
+        #game-over-overlay .result-actions { margin-top: 26px; display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        #game-over-overlay .result-actions button { font-family: Fredoka, sans-serif; font-weight: 700; font-size: 1rem; padding: 12px 28px; border-radius: 9999px; border: none; cursor: pointer; transition: transform 0.12s ease, filter 0.12s ease; }
+        #game-over-overlay .result-actions button:hover { transform: translateY(-2px); filter: brightness(1.05); }
+        #game-over-overlay .result-actions button:active { transform: translateY(1px); }
+        #rematch-btn { background: linear-gradient(to right, #34D399, #1DD1A1); color: #fff; box-shadow: 0 4px 0 0 #109E79, 0 8px 16px rgba(29,209,161,0.35); }
+        #home-btn { background: #fff; color: #1e0f4c; box-shadow: 0 4px 0 0 rgba(15,23,42,0.18); }
+        @keyframes result-pop {
+            0% { transform: scale(0.3); opacity: 0; }
+            70% { transform: scale(1.12); opacity: 1; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .stats-card .stat-row { display: flex; justify-content: space-between; align-items: center; padding: 8px; font-size: 0.85rem; background: #F8FAFC; border: 1px solid #F1F5F9; border-radius: 0.75rem; margin-bottom: 8px; font-family: Fredoka, sans-serif; }
+        .stats-card .stat-row .label { color: #475569; }
+        .stats-card .stat-row .value { font-weight: 700; color: #0F172A; }
+        .stats-card .effective { margin-top: 8px; padding: 10px 16px; border-radius: 1rem; text-align: center; font-size: 0.9rem; font-family: Fredoka, sans-serif; font-weight: 700; background: linear-gradient(to right, #FBBF24, #FECA57); border: 2px solid #FCD34D; }
+        .stats-card .empty { color: #94A3B8; font-size: 0.8rem; text-align: center; padding: 16px 0; }
+        .stats-card.card-pop { animation: card-pop 0.22s ease-out; transform-origin: top center; }
+        @keyframes card-pop {
+            from { opacity: 0; transform: scaleY(0.92) translateY(-4px); }
+            to { opacity: 1; transform: scaleY(1) translateY(0); }
+        }
+
+        .history-feed { font-size: 0.75rem; line-height: 1.5; }
+        .history-feed .entry { display: flex; gap: 8px; }
+        .history-feed .entry .turn-num { color: #94A3B8; min-width: 28px; font-weight: 700; }
+        .history-feed .entry.blue { border-left: 3px solid #38B6FF; padding-left: 6px; }
+        .history-feed .entry.red { border-left: 3px solid #FF6B6B; padding-left: 6px; }
+        /* Full-history explorer modal */
+        #history-modal { backdrop-filter: blur(6px); }
+        #history-modal .history-scroll::-webkit-scrollbar { width: 8px; }
+        #history-modal .history-scroll::-webkit-scrollbar-thumb { background: #e9d5ff; border-radius: 8px; }
+        #history-modal .history-feed .entry { padding: 6px 8px; border-radius: 0.65rem; }
+        #history-modal .history-feed .entry.blue { background: #EFF6FF; }
+        #history-modal .history-feed .entry.red { background: #FFF1F2; }
+        .history-filter-btn { padding: 4px 12px; border-radius: 9999px; font-size: 0.72rem; font-weight: 800; font-family: Fredoka, sans-serif; border: 2px solid #E9D5FF; background: #fff; color: #6D28D9; cursor: pointer; transition: all 0.15s; }
+        .history-filter-btn.active { background: #7D5FFF; border-color: #7D5FFF; color: #fff; }
+        /* Board coordinates — outside headers (display only, backend keeps 21,1 coords) */
+        #board-with-coords {
+            width: 100%;
+            background: #E0E6ED;
+            border: 3px solid #BFC8D4;
+            border-radius: 1.25rem;
+            padding: 10px;
+            box-shadow: 0 6px 0 0 rgba(15,23,42,0.07);
+        }
+        #col-labels {
+            display: grid;
+            grid-template-columns: repeat(16, minmax(0, 1fr));
+            gap: 3px;
+            margin-left: calc(28px + 3px);
+            margin-bottom: 6px;
+        }
+        #board-midrow { display: flex; gap: 3px; }
+        #row-labels {
+            display: grid;
+            grid-template-rows: repeat(13, minmax(0, 1fr));
+            gap: 3px;
+            width: 28px;
+            flex: 0 0 28px;
+        }
+        .coord-head {
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.78rem; font-weight: 700; font-family: Fredoka, sans-serif;
+            color: #000; line-height: 1; user-select: none;
+            min-width: 0; min-height: 0;
+        }
+        #board-with-coords #board-grid {
+            flex: 1 1 auto; min-width: 0;
+            background: transparent; border: none; padding: 0;
+            gap: 3px;
+            aspect-ratio: 16 / 13; width: 100%;
+        }
+        /* Global hover tooltip for pieces (single fixed element, avoids .cell overflow clipping) */
+        #piece-tooltip {
+            display: none; position: fixed; z-index: 200;
+            min-width: 140px; max-width: 220px; padding: 8px 10px; border-radius: 0.75rem;
+            background: #0F172A; color: #F8FAFC;
+            font-size: 0.68rem; font-weight: 600; line-height: 1.45;
+            font-family: Quicksand, sans-serif; text-align: left;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.3); pointer-events: none;
+            white-space: nowrap;
+        }
+        #piece-tooltip .ttitle { font-family: Fredoka, sans-serif; font-weight: 700; font-size: 0.72rem; margin-bottom: 2px; }
+        #piece-tooltip .trow { display: flex; justify-content: space-between; gap: 12px; }
+        #piece-tooltip .trow span:last-child { font-weight: 700; color: #FECA57; }
+        #piece-tooltip .tnote { opacity: 0.7; margin-top: 2px; font-size: 0.62rem; }
+
+        .toast {
+            position: fixed; top: 20px; left: 50%;
+            transform: translateX(-50%);
+            background: #fff; border: 2px solid #FECDD3; color: #E8458B;
+            padding: 8px 20px; border-radius: 9999px;
+            font-size: 0.85rem; font-weight: 700; font-family: Fredoka, sans-serif;
+            z-index: 100; display: none;
+            box-shadow: 0 6px 0 0 rgba(0,0,0,0.08);
+            animation: fadeIn 0.2s;
+        }
+        .toast.show { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(-10px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+
+        /* Effect arrival: pop the Active Ability box so a new turn's tool is
+           immediately visible, even mid-board-stare. */
+        .effect-pop { animation: effect-pop 0.9s ease; }
+        @keyframes effect-pop {
+            0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.55); }
+            35% { transform: scale(1.04); box-shadow: 0 0 0 7px rgba(124, 58, 237, 0.18); }
+            100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(124, 58, 237, 0); }
+        }
+        /* Active Ability is the hero — big pill BUTTON so the turn's effect can't be missed */
+        .effect-chip { transition: background 0.2s, color 0.2s; }
+        #active-ability-box { text-align: center; padding: 16px 14px !important; border-width: 2px !important; box-shadow: 0 4px 14px rgba(125,95,255,0.15); }
+        #active-ability-box .ability-label { justify-content: center; font-size: 0.95rem !important; font-weight: 700 !important; letter-spacing: 0.02em; }
+        #effect-chip { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 1.4rem !important; font-weight: 700; font-family: Fredoka, sans-serif; padding: 12px 34px !important; border-radius: 9999px; margin-top: 8px; line-height: 1.2; min-width: 210px; border: 2px solid rgba(15,23,42,0.12); cursor: pointer; transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease; box-shadow: 0 4px 0 rgba(15,23,42,0.22), 0 8px 16px rgba(15,23,42,0.12); }
+        #effect-chip:not(:disabled) { animation: chip-invite 1.8s ease-in-out infinite; }
+        #effect-chip:not(:disabled):hover { transform: translateY(-2px) scale(1.02); filter: brightness(1.05); box-shadow: 0 6px 0 rgba(15,23,42,0.22), 0 10px 20px rgba(15,23,42,0.14); }
+        #effect-chip:not(:disabled):active { transform: translateY(2px) scale(0.99); box-shadow: 0 1px 0 rgba(15,23,42,0.22); }
+        #effect-chip:not(:disabled):focus-visible { outline: 3px solid #7D5FFF; outline-offset: 2px; }
+        #effect-chip:disabled { cursor: default; opacity: 0.95; box-shadow: none; animation: none; }
+        #effect-chip.armed { animation: none; outline: 3px solid #7D5FFF; box-shadow: 0 0 0 6px rgba(125,95,255,0.25), 0 6px 16px rgba(125,95,255,0.35); transform: scale(1.03); }
+        @keyframes chip-invite {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.045); }
+        }
+        #effect-chip-tip { font-size: 1rem !important; line-height: 1.5 !important; margin-top: 10px !important; font-weight: 600 !important; }
+        #effect-arm-hint { font-size: 0.82rem !important; font-weight: 700; font-family: Fredoka, sans-serif; color: #7D5FFF; margin-top: 6px; min-height: 1.1em; }
+        /* Sparkles that twinkle over the Active Ability box on a new effect */
+        #active-ability-box { position: relative; overflow: hidden; }
+        .sparkle {
+            position: absolute;
+            pointer-events: none;
+            line-height: 1;
+            opacity: 0;
+            animation: sparkle-twinkle 1.4s ease-in-out forwards;
+        }
+        @keyframes sparkle-twinkle {
+            0% { opacity: 0; transform: scale(0.2) rotate(0deg); }
+            30% { opacity: 1; transform: scale(1.15) rotate(20deg); }
+            70% { opacity: 1; transform: scale(0.95) rotate(-12deg); }
+            100% { opacity: 0; transform: scale(0.4) rotate(0deg); }
+        }
+        /* Spike-cap legend: larger, high-contrast tiles in a 4x2 grid */
+        .caps-legend .cap-tile {
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: #fff; border: 2px solid #DDD6FE; border-radius: 0.75rem;
+            padding: 6px 2px; line-height: 1.25;
+        }
+        .caps-legend .cap-tile .cl { font-size: 0.6rem; font-weight: 800; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.06em; font-family: Fredoka, sans-serif; }
+        .caps-legend .cap-tile .cs { font-size: 1rem; font-weight: 800; color: #0F172A; font-family: Fredoka, sans-serif; }
+        .caps-legend .cap-tile .cc { font-size: 0.95rem; font-weight: 800; color: #6D28D9; font-family: Fredoka, sans-serif; }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #DDD6FE; border-radius: 3px; }
+
+        @media (max-width: 1024px) {
+            .board-grid { gap: 3px !important; }
+            .piece { font-size: 0.6rem; }
+            .piece .str { font-size: 0.9rem; }
+            .piece .armor { font-size: 0.58rem; }
+        }
+
+        /* ===== Desktop-only game layout: board first, slim chrome ===== */
+        html, body { height: 100%; }
+        body.game-active { height: 100vh; overflow: hidden; }
+        body.game-active #main-container {
+            height: 100vh; max-height: 100vh; max-width: 1760px !important;
+            display: flex !important; flex-direction: column !important;
+            gap: 8px !important; padding: 10px 16px !important; margin: 0 auto;
+        }
+        /* Slim header */
+        body.game-active header { padding: 8px 16px !important; border-radius: 16px !important; gap: 8px !important; }
+        body.game-active header h1 { font-size: 1.25rem !important; }
+        body.game-active header .w-11 { width: 32px !important; height: 32px !important; font-size: 1.1rem !important; border-radius: 10px !important; }
+        /* Turn badge + match stats live inside the side panel now (no full-width banner) */
+        #turn-status { display: none !important; }
+        #turn-badge { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 0.82rem; font-weight: 700; font-family: Fredoka, sans-serif; padding: 7px 14px; border-radius: 9999px; margin-top: 8px; width: 100%; text-align: center; line-height: 1.3; }
+        #turn-badge.mine { background: linear-gradient(to right, #34D399, #1DD1A1); color: #fff; box-shadow: 0 3px 0 0 #109E79; }
+        #turn-badge.theirs { background: #F1F5F9; color: #64748B; border: 1px solid #E2E8F0; }
+        #turn-badge.done { background: #F1F5F9; color: #475569; border: 1px solid #E2E8F0; }
+        #match-stats { display: flex; gap: 6px; }
+        #match-stats .ms { flex: 1; background: #F8FAFC; border: 1px solid #F1F5F9; border-radius: 0.75rem; padding: 6px 4px; text-align: center; font-family: Fredoka, sans-serif; }
+        #match-stats .ms .v { font-weight: 700; color: #0F172A; font-size: 0.9rem; line-height: 1.1; }
+        #match-stats .ms .k { font-size: 0.62rem; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.5px; }
+        body.game-active .thinking-indicator { padding: 0 !important; font-size: 0.75rem !important; min-height: 0; }
+        /* Main row: board stretches, panel comfortably wide for reading */
+        body.game-active #game-area {
+            display: flex !important; flex-direction: row !important;
+            gap: 10px !important; flex: 1 !important; min-height: 0 !important;
+            align-items: stretch !important;
+        }
+        body.game-active #board-area {
+            flex: 1 1 auto !important; min-width: 0 !important; min-height: 0 !important;
+            display: flex !important; flex-direction: column !important;
+            justify-content: center !important;
+            padding: 6px !important; border-radius: 18px !important;
+        }
+        body.game-active #board-with-coords {
+            width: min(100%, calc((100vh - 96px) * 16 / 13)) !important;
+            max-height: 100% !important;
+            margin: auto !important;
+        }
+        body.game-active #board-grid {
+            width: 100% !important;
+            max-height: none !important;
+            margin: 0 !important;
+            gap: 3px !important; padding: 0 !important;
+            aspect-ratio: 16 / 13;
+        }
+        /* Wider side panel — reclaims leftover space beside the board */
+        body.game-active aside.right-panel {
+            width: 360px !important; flex: 0 0 360px !important;
+            min-height: 0 !important; max-height: 100% !important;
+            overflow-y: auto !important; gap: 12px !important;
+            display: flex !important; flex-direction: column !important;
+            font-size: 0.9rem !important;
+        }
+        body.game-active aside.right-panel > * { flex-shrink: 0; }
+        body.game-active #turn-banner { padding: 14px 16px !important; border-radius: 16px !important; }
+        body.game-active #turn-banner h2 { font-size: 1.08rem !important; line-height: 1.3 !important; }
+        body.game-active #selected-card { padding: 14px 16px !important; border-radius: 16px !important; }
+        body.game-active #selected-card h3 { font-size: 1rem !important; }
+        body.game-active #tips-box { padding: 14px 16px !important; border-radius: 16px !important; }
+        body.game-active #tips-box .tip-text { font-size: 0.84rem !important; line-height: 1.6 !important; }
+        body.game-active #turn-banner .ability-label { font-size: 0.95rem !important; }
+        body.game-active #effect-chip { font-size: 1.4rem !important; padding: 12px 34px !important; }
+        body.game-active #effect-chip-tip { font-size: 1rem !important; line-height: 1.5 !important; font-weight: 600 !important; }
+        body.game-active #match-stats .ms .v { font-size: 1rem !important; }
+        body.game-active #match-stats .ms .k { font-size: 0.68rem !important; }
+        .piece .str { font-size: clamp(1rem, 1.6vw, 1.6rem); }
+        .piece .armor { font-size: clamp(0.58rem, 0.8vw, 0.66rem); }
+    </style>
+</head>
+<body class="font-body text-on-surface min-h-screen flex flex-col justify-between relative selection:bg-pink-300 selection:text-pink-900 antialiased overflow-x-hidden select-none">
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+    <!-- Single global piece tooltip (positioned by JS on hover) -->
+    <div id="piece-tooltip" role="tooltip"></div>
+
+    <!-- Full-screen win/lose overlay -->
+    <div id="game-over-overlay">
+        <div class="result-card">
+            <div class="flair" id="game-over-flair">✨✨✨</div>
+            <h1 class="title" id="game-over-title">You Win!</h1>
+            <div class="subtitle" id="game-over-subtitle"></div>
+            <div class="result-actions">
+                <button id="rematch-btn" onclick="requestRematch()" type="button">🔄 Rematch</button>
+                <button id="home-btn" onclick="goHome()" type="button">🏠 Home</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cheerful Floating Candy Bubble Glows (landing only, hidden in game) -->
+    <div id="landing-glows" class="pointer-events-none fixed inset-0 z-0 overflow-hidden">
+        <div class="absolute -top-24 left-1/2 -translate-x-1/2 w-[760px] h-[480px] bg-gradient-to-tr from-pink-200/60 via-amber-200/50 to-cyan-200/50 blur-[100px] rounded-full"></div>
+        <div class="absolute top-1/4 -left-32 w-96 h-96 bg-cyan-200/50 blur-[110px] rounded-full"></div>
+        <div class="absolute top-1/2 -right-32 w-96 h-96 bg-pink-200/60 blur-[110px] rounded-full"></div>
+        <div class="absolute bottom-10 left-1/3 w-80 h-80 bg-yellow-200/50 blur-[90px] rounded-full"></div>
+    </div>
+
+    <!-- ============ LANDING / HOME (new design) ============ -->
+    <div id="landing" class="relative z-10 w-full flex-1 flex flex-col">
+        <!-- Minimal Header -->
+        <header class="w-full border-b-2 border-purple-100 bg-white/80 backdrop-blur-md">
+            <div class="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
+                <a class="flex items-center gap-2.5 group" href="#" onclick="return false">
+                    <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-pink-500 via-rose-500 to-amber-400 flex items-center justify-center shadow-md shadow-pink-200 group-hover:rotate-12 transition-transform duration-300">
+                        <span class="material-symbols-outlined text-[20px] text-white">swords</span>
+                    </div>
+                    <span class="font-display font-bold text-2xl tracking-wide bg-gradient-to-r from-pink-600 via-purple-600 to-cyan-600 bg-clip-text text-transparent drop-shadow-sm">Number Wars</span>
+                </a>
+                <div class="flex items-center gap-2.5">
+                    <button aria-label="How to play" onclick="openRules()" title="How to play" class="h-9 px-4 rounded-full bg-white border-2 border-purple-100 flex items-center gap-1.5 justify-center text-purple-700 hover:bg-purple-50 hover:border-purple-300 shadow-sm transition-all duration-200 active:scale-90 font-display font-bold text-sm" type="button">
+                        <span class="material-symbols-outlined text-[20px]">menu_book</span><span class="hidden sm:inline">Rules</span>
+                    </button>
+                    <button aria-label="Toggle Sound" title="Sound" class="w-9 h-9 rounded-full bg-white border-2 border-purple-100 flex items-center justify-center text-purple-700 hover:bg-purple-50 hover:border-purple-300 shadow-sm transition-all duration-200 active:scale-90" type="button" onclick="showToast('Sound is on (cosmetic)')">
+                        <span class="material-symbols-outlined text-[20px]">volume_up</span>
+                    </button>
+                    <button aria-label="Help & Guide" onclick="openRules()" class="w-9 h-9 rounded-full bg-white border-2 border-purple-100 flex items-center justify-center text-purple-700 hover:bg-purple-50 hover:border-purple-300 shadow-sm transition-all duration-200 active:scale-90" type="button">
+                        <span class="material-symbols-outlined text-[20px]">help</span>
+                    </button>
+                </div>
+            </div>
+        </header>
+        <!-- Center Hero & Clean Game Lobby -->
+        <main class="flex-1 flex flex-col items-center justify-center px-6 py-10">
+            <div class="w-full max-w-4xl flex flex-col items-center">
+                <div class="text-center max-w-2xl mb-10">
+                    <h1 class="font-display font-extrabold text-5xl sm:text-6xl tracking-tight mb-3">
+                        <span class="text-pink-600 inline-block hover:scale-105 transition-transform duration-200 cursor-default">Number</span>
+                        <span class="text-cyan-500 inline-block hover:scale-105 transition-transform duration-200 cursor-default">Wars</span>
+                    </h1>
+                    <p class="text-on-surface-variant font-body font-semibold text-sm sm:text-base leading-relaxed max-w-xl mx-auto">A turn-based strategy game on an evolving battlefield. Capture enemy pieces, merge your forces, and outmaneuver your opponent.</p>
+                    <button onclick="openRules()" class="mt-4 inline-flex items-center gap-1.5 text-sm font-bold text-purple-700 bg-white/80 border-2 border-purple-200 rounded-full px-4 py-1.5 hover:bg-purple-50 hover:border-purple-400 transition shadow-sm" type="button">
+                        <span class="material-symbols-outlined text-[18px]">school</span> New here? Learn the rules in 2 minutes
+                    </button>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-3xl mb-10">
+                    <button onclick="createRoom('friend')" class="group relative flex flex-col items-center text-center p-7 rounded-3xl bg-white border-3 border-cyan-300 shadow-candy-cyan hover:-translate-y-1.5 transition-all duration-300 cursor-pointer active:translate-y-1" type="button">
+                        <div class="w-16 h-16 mb-4 rounded-2xl bg-cyan-100 border-2 border-cyan-300 flex items-center justify-center text-cyan-600 group-hover:scale-110 group-hover:bg-cyan-500 group-hover:text-white transition-all duration-300 shadow-inner">
+                            <span class="material-symbols-outlined text-[32px]">group</span>
+                        </div>
+                        <h2 class="font-display font-bold text-xl text-slate-800 mb-1.5 group-hover:text-cyan-600 transition-colors">Play with Friend</h2>
+                        <p class="text-slate-500 font-medium text-xs sm:text-sm leading-snug">Share a link and play together</p>
+                    </button>
+                    <button onclick="createRoom('ai')" class="group relative flex flex-col items-center text-center p-7 rounded-3xl bg-white border-3 border-pink-300 shadow-candy-pink hover:-translate-y-1.5 transition-all duration-300 cursor-pointer active:translate-y-1" type="button">
+                        <div class="absolute -top-3.5 px-3.5 py-1 rounded-full bg-gradient-to-r from-pink-500 via-rose-500 to-pink-500 text-[11px] font-display font-bold uppercase tracking-wider text-white shadow-md shadow-pink-300/60 ring-2 ring-white">Smart AI</div>
+                        <div class="w-16 h-16 mb-4 rounded-2xl bg-pink-100 border-2 border-pink-300 flex items-center justify-center text-pink-600 group-hover:scale-110 group-hover:bg-pink-500 group-hover:text-white transition-all duration-300 shadow-inner">
+                            <span class="material-symbols-outlined text-[32px]">smart_toy</span>
+                        </div>
+                        <h2 class="font-display font-bold text-xl text-slate-800 mb-1.5 group-hover:text-pink-600 transition-colors">Play vs AI</h2>
+                        <p class="text-slate-500 font-medium text-xs sm:text-sm leading-snug">Fight against a language model</p>
+                    </button>
+                    <div class="group relative flex flex-col items-center text-center p-7 rounded-3xl bg-white border-3 border-amber-300 shadow-candy-yellow hover:-translate-y-1.5 transition-all duration-300 cursor-pointer" onclick="createRoom('computer')" role="button" tabindex="0" onkeydown="if(event.key==='Enter')createRoom('computer')">
+                        <div class="w-16 h-16 mb-4 rounded-2xl bg-amber-100 border-2 border-amber-300 flex items-center justify-center text-amber-600 group-hover:scale-110 group-hover:bg-amber-400 group-hover:text-slate-900 transition-all duration-300 shadow-inner">
+                            <span class="material-symbols-outlined text-[32px]">desktop_windows</span>
+                        </div>
+                        <h2 class="font-display font-bold text-xl text-slate-800 mb-1 group-hover:text-amber-600 transition-colors">Play vs Computer</h2>
+                        <p class="text-slate-500 font-medium text-xs sm:text-sm leading-snug mb-4">Face a local algorithm</p>
+                        <div class="w-full mt-auto pt-1" onclick="event.stopPropagation()">
+                            <div class="relative">
+                                <select id="computer-difficulty" onclick="event.stopPropagation()" onchange="event.stopPropagation()" class="w-full appearance-none bg-amber-50/80 hover:bg-amber-100 text-amber-900 text-xs font-bold py-2.5 px-3 pr-8 rounded-xl border-2 border-amber-300 focus:border-amber-500 focus:outline-none transition-all cursor-pointer text-center">
+                                    <option value="easy">Casual</option>
+                                    <option value="medium" selected>Medium</option>
+                                    <option value="hard">Hard</option>
+                                </select>
+                                <span class="material-symbols-outlined pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-[18px] text-amber-700 font-bold">expand_more</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex flex-wrap items-center justify-center gap-3 text-xs sm:text-sm text-slate-600 font-medium">
+                    <span class="font-bold text-slate-700">Or enter a room code:</span>
+                    <div class="flex items-center gap-2 bg-white/90 p-1.5 rounded-2xl border-2 border-purple-200 shadow-sm">
+                        <input id="room-code" class="w-28 sm:w-32 bg-purple-50/60 border border-purple-200 rounded-xl px-3 py-1.5 text-center text-xs sm:text-sm font-extrabold text-purple-900 placeholder:text-purple-300 focus:outline-none focus:ring-2 focus:ring-pink-400 tracking-wider font-mono uppercase transition-all" maxlength="6" placeholder="abc123" type="text" onkeydown="if(event.key==='Enter')joinByCode()" />
+                        <button onclick="joinByCode()" class="px-5 py-2 rounded-xl bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white font-display font-bold text-xs sm:text-sm shadow-bubble-btn active:translate-y-1 transition-all duration-150" type="button">Join</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+        <footer class="w-full py-4 text-center text-[12px] font-bold text-purple-900/40">Number Wars © 2025</footer>
+    </div>
+
+    <!-- ============ RULES MODAL (beginner guide) ============ -->
+    <div id="rules-modal" class="fixed inset-0 z-[90] hidden items-center justify-center p-4 sm:p-6 bg-purple-950/50" onclick="if(event.target===this)closeRules()" role="dialog" aria-modal="true" aria-label="How to play Number Wars">
+        <div class="w-full max-w-2xl max-h-[88vh] flex flex-col bg-white rounded-3xl border-2 border-purple-200 shadow-2xl overflow-hidden">
+            <div class="flex items-center justify-between gap-3 px-6 py-4 bg-gradient-to-r from-pink-500 via-purple-500 to-cyan-500 text-white shrink-0">
+                <div class="flex items-center gap-2.5">
+                    <span class="material-symbols-outlined text-[26px]">menu_book</span>
+                    <div>
+                        <h2 class="font-display font-bold text-xl leading-none">How to play</h2>
+                        <p class="text-white/85 text-xs font-semibold mt-1">Beginner guide — learn in about 2 minutes</p>
+                    </div>
+                </div>
+                <button onclick="closeRules()" aria-label="Close rules" class="w-9 h-9 rounded-full bg-white/20 hover:bg-white/35 flex items-center justify-center transition active:scale-90" type="button"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            <div class="rules-scroll overflow-y-auto px-6 py-5 space-y-5 text-sm leading-relaxed text-slate-600 font-medium">
+                <section class="bg-pink-50 border-2 border-pink-200 rounded-2xl p-4">
+                    <h3 class="font-display font-bold text-slate-800 text-base mb-1 flex items-center gap-1.5"><span class="material-symbols-outlined text-pink-500">flag</span> Goal — two ways to win</h3>
+                    <p>You and your opponent each start with <strong>8 pieces</strong> (numbered 1–8). <strong>Win by capturing all enemy pieces</strong> (or by points if no one can finish the fight).</p>
+                    <p class="mt-2"><strong>🥇 OR collect 10 ⭐ stars.</strong> Be the first to gather ten stars and you win instantly — a fast comeback path when you're behind on pieces.</p>
+                </section>
+                <section>
+                    <h3 class="font-display font-bold text-slate-800 text-base mb-2 flex items-center gap-1.5"><span class="material-symbols-outlined text-purple-500">playing_cards</span> 1. Your pieces — what the numbers mean</h3>
+                    <div class="grid sm:grid-cols-2 gap-2.5">
+                        <div class="rule-step bg-white border-2 border-slate-200 rounded-2xl p-3"><div class="font-bold text-slate-800">⭐ Strength = attack</div><p class="text-xs mt-0.5">The big number. Higher hits harder. Max is 8.</p></div>
+                        <div class="rule-step bg-white border-2 border-slate-200 rounded-2xl p-3"><div class="font-bold text-slate-800">🛡 Armor = health shield</div><p class="text-xs mt-0.5">Damage hits armor first. Small pieces (1–3) are tanks with lots of armor.</p></div>
+                        <div class="rule-step bg-white border-2 border-slate-200 rounded-2xl p-3"><div class="font-bold text-slate-800">⚡ Spike = counter-attack</div><p class="text-xs mt-0.5">Hurts anyone who attacks this piece. Collected from ⚡ shards.</p></div>
+                        <div class="rule-step bg-white border-2 border-slate-200 rounded-2xl p-3"><div class="font-bold text-slate-800">📏 Range = steps per turn</div><p class="text-xs mt-0.5">A 5 can move up to 5 squares. You may always move fewer — or just reposition.</p></div>
+                    </div>
+                    <p class="mt-2 text-xs bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">💡 <strong>Simple rule of thumb:</strong> small numbers = tough defenders, big numbers = fragile attackers. Hide your big pieces behind small ones.</p>
+                </section>
+                <section>
+                    <h3 class="font-display font-bold text-slate-800 text-base mb-2 flex items-center gap-1.5"><span class="material-symbols-outlined text-cyan-600">footprints</span> 2. Moving — rooks vs queens</h3>
+                    <ul class="space-y-1.5 list-none">
+                        <li class="flex gap-2"><span>♟</span><span><strong>Pieces 1–4</strong> move like a <strong>queen</strong> (straight + diagonal).</span></li>
+                        <li class="flex gap-2"><span>♜</span><span><strong>Pieces 5–8</strong> move like a <strong>rook</strong> (straight lines only).</span></li>
+                        <li class="flex gap-2"><span>🚧</span><span>You <strong>can't jump over</strong> pieces or dark brick walls.</span></li>
+                        <li class="flex gap-2"><span>⚔️</span><span>Move <strong>onto an enemy</strong> to attack it — on <strong>every</strong> turn, no matter the bonus effect.</span></li>
+                    </ul>
+                </section>
+                <section>
+                    <h3 class="font-display font-bold text-slate-800 text-base mb-2 flex items-center gap-1.5"><span class="material-symbols-outlined text-pink-500">casino</span> 3. Each turn has a bonus power</h3>
+                    <p class="mb-2">Every turn the game rolls one bonus. You can always ignore it and just move.</p>
+                    <div class="space-y-2">
+                        <div class="rule-step flex gap-3 bg-emerald-50 border-2 border-emerald-200 rounded-2xl p-3"><span class="text-xl">➕</span><div><div class="font-bold text-slate-800">Merge — combine two of yours (automatic)</div><p class="text-xs">Move one of your pieces <strong>onto another of yours</strong>. Strengths and armor add up (max 8 strength). This is how you build a super-piece.</p></div></div>
+                        <div class="rule-step flex gap-3 bg-sky-50 border-2 border-sky-200 rounded-2xl p-3"><span class="text-xl">➗</span><div><div class="font-bold text-slate-800">Split — one piece becomes two (click effect, then a piece)</div><p class="text-xs">Only <strong>even</strong> pieces (2, 4, 6, 8) can split — an 8 becomes two 4s on adjacent squares.</p></div></div>
+                        <div class="rule-step flex gap-3 bg-amber-50 border-2 border-amber-200 rounded-2xl p-3"><span class="text-xl">➖</span><div><div class="font-bold text-slate-800">Weaken — shrink any piece by 1 (click effect, then a piece)</div><p class="text-xs">Works on <strong>yours or the enemy's</strong>. Drops strength, armor and range by 1 — <strong>spikes are untouched, never reduced</strong>. Lower strength <strong>raises the spike cap by 1</strong>, so spikes are never shed. A <strong>1/1/1</strong> piece is invulnerable.</p></div></div>
+                        <div class="rule-step flex gap-3 bg-purple-50 border-2 border-purple-200 rounded-2xl p-3"><span class="text-xl">✖️</span><div><div class="font-bold text-slate-800">Strengthen — double attack, lose armor (rare!)</div><p class="text-xs">A 3 becomes a 6 but loses 3 armor. Never use it on a piece with no armor left.</p></div></div>
+                    </div>
+                </section>
+                <section>
+                    <h3 class="font-display font-bold text-slate-800 text-base mb-2 flex items-center gap-1.5"><span class="material-symbols-outlined text-rose-500">swords</span> 4. Fighting — what happens when you attack</h3>
+                    <ol class="space-y-1.5 list-decimal list-inside">
+                        <li><strong>Spikes hit first.</strong> The defender's ⚡ chips your armor, then your strength. Weak attackers can die on spikes!</li>
+                        <li><strong>Overwhelm wins instantly.</strong> If your (remaining) strength beats their strength + armor + spikes combined, you capture them.</li>
+                        <li><strong>Otherwise you chip their armor</strong> and bounce back. Hit the same piece twice to finish it.</li>
+                    </ol>
+                    <p class="mt-2 text-xs bg-sky-50 border border-sky-200 rounded-xl px-3 py-2">💡 <strong>Beginner tip:</strong> attack spiky pieces with your tanky small pieces (they have armor to spare), and save your big 7s and 8s for clean captures.</p>
+                </section>
+                <section>
+                    <h3 class="font-display font-bold text-slate-800 text-base mb-2 flex items-center gap-1.5"><span class="material-symbols-outlined text-amber-500">diamond</span> 5. Pickups, stars & the shrinking board</h3>
+                    <ul class="space-y-1.5">
+                        <li class="flex gap-2"><span>🛡</span><span><strong>Armor shards</strong> give +1 armor forever (no limit). Always grab them.</span></li>
+                        <li class="flex gap-2"><span>⚡</span><span><strong>Spike shards</strong> give +1 counter-attack. Small pieces can hold more spikes than big ones.</span></li>
+                        <li class="flex gap-2"><span>⭐</span><span><strong>Stars</strong> — collect 10 to win. One spawns every 10 turns in the center of the board (only one at a time). <strong>Land on it</strong> to grab it; stars don't block your path. Watch your ⭐ counter (0/10) in the side panel.</span></li>
+                        <li class="flex gap-2"><span>🧱</span><span>After <strong>turn 20</strong>, dark <strong>brick walls</strong> appear one per turn. The board slowly closes in — don't hide forever!</span></li>
+                    </ul>
+                </section>
+                <section class="bg-purple-50 border-2 border-purple-200 rounded-2xl p-4">
+                    <h3 class="font-display font-bold text-slate-800 text-base mb-1 flex items-center gap-1.5"><span class="material-symbols-outlined text-purple-500">rocket_launch</span> Your first game — do this</h3>
+                    <ol class="list-decimal list-inside space-y-1">
+                        <li>Move a small piece (1–3) forward as a shield.</li>
+                        <li>Walk onto 🛡 shards with anything, onto ⚡ shards with small pieces, and onto ⭐ stars whenever you can reach one safely.</li>
+                        <li>On a <strong>Merge</strong> turn, stack two pieces together (3 + 5 = a mighty 8!).</li>
+                        <li>Attack only when your strength looks bigger than their whole pile (strength + armor + spikes).</li>
+                        <li>Keep half an eye on stars — grabbing 10 wins the game even if you're losing the battle.</li>
+                    </ol>
+                </section>
+            </div>
+            <div class="px-6 py-4 border-t-2 border-purple-100 bg-purple-50/60 flex flex-wrap items-center justify-between gap-2 shrink-0">
+                <span class="text-xs font-bold text-purple-900/50">Tip: you can also just move without using the bonus.</span>
+                <button onclick="closeRules()" class="px-6 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-600 hover:to-rose-600 text-white font-display font-bold text-sm shadow-bubble-btn active:translate-y-0.5 transition" type="button">Got it — let's play!</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ FULL HISTORY EXPLORER MODAL ============ -->
+    <div id="history-modal" class="fixed inset-0 z-[90] hidden items-center justify-center p-4 sm:p-6 bg-purple-950/50" onclick="if(event.target===this)closeHistory()" role="dialog" aria-modal="true" aria-label="Full move history">
+        <div class="w-full max-w-2xl max-h-[88vh] flex flex-col bg-white rounded-3xl border-2 border-purple-200 shadow-2xl overflow-hidden">
+            <div class="flex items-center justify-between gap-3 px-6 py-4 bg-gradient-to-r from-pink-500 via-purple-500 to-cyan-500 text-white shrink-0">
+                <div class="flex items-center gap-2.5">
+                    <span class="material-symbols-outlined text-[26px]">history</span>
+                    <div>
+                        <h2 class="font-display font-bold text-xl leading-none">Move History</h2>
+                        <p class="text-white/85 text-xs font-semibold mt-1" id="history-modal-count">0 moves</p>
+                    </div>
+                </div>
+                <button onclick="closeHistory()" aria-label="Close history" class="w-9 h-9 rounded-full bg-white/20 hover:bg-white/35 flex items-center justify-center transition active:scale-90" type="button"><span class="material-symbols-outlined">close</span></button>
+            </div>
+            <div class="px-6 pt-4 pb-2 flex flex-wrap items-center gap-2 shrink-0">
+                <button class="history-filter-btn active" data-filter="all" onclick="setHistoryFilter('all')" type="button">All</button>
+                <button class="history-filter-btn" data-filter="blue" onclick="setHistoryFilter('blue')" type="button">🔵 Blue</button>
+                <button class="history-filter-btn" data-filter="red" onclick="setHistoryFilter('red')" type="button">🔴 Red</button>
+                <input id="history-search" oninput="setHistorySearch(this.value)" placeholder="Search moves…" class="flex-1 min-w-[140px] bg-purple-50/60 border border-purple-200 rounded-xl px-3 py-1.5 text-xs font-bold text-purple-900 placeholder:text-purple-300 focus:outline-none focus:ring-2 focus:ring-pink-400" type="text" />
+            </div>
+            <div class="history-scroll overflow-y-auto px-6 py-4 shrink min-h-0">
+                <div class="history-feed flex flex-col gap-1.5" id="history-full-list"></div>
+            </div>
+            <div class="px-6 py-3 border-t-2 border-purple-100 bg-purple-50/60 shrink-0">
+                <span class="text-xs font-bold text-purple-900/50">Newest first — every move this game, no trimming.</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- MainContainer -->
+    <div id="main-container" class="relative z-10 max-w-[1440px] w-full mx-auto flex-col gap-4 flex-grow p-3 sm:p-5 lg:p-6" style="display:none;">
+        <!-- HeaderBar -->
+        <header class="bg-white/90 backdrop-blur-md rounded-3xl p-3 sm:px-6 sm:py-3 shadow-pop border-2 border-purple-100 flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-3">
+                <div class="w-11 h-11 bg-gradient-to-tr from-candy-deepPink to-candy-pink rounded-2xl flex items-center justify-center text-white shadow-pop-pink font-fredoka text-2xl transform -rotate-3">⚔️</div>
+                <div>
+                    <h1 class="font-fredoka text-2xl sm:text-3xl font-bold tracking-tight bg-gradient-to-r from-candy-deepPink via-candy-purple to-candy-sky bg-clip-text text-transparent leading-none">Number Wars</h1>
+                </div>
+            </div>
+            <div class="flex items-center flex-wrap gap-2 sm:gap-3 text-xs sm:text-sm font-fredoka" id="header-info">
+                <div class="flex items-center gap-1.5 bg-purple-50 text-candy-purple font-semibold px-3.5 py-1.5 rounded-full border border-purple-200">
+                    <span class="text-purple-400">Room:</span>
+                    <span class="font-bold text-slate-800" id="room-id-display">—</span>
+                </div>
+                <div class="flex items-center gap-1.5 bg-candy-pink/10 text-candy-deepPink font-bold px-3 py-1.5 rounded-full border border-pink-200 shadow-sm">
+                    <span class="w-2 h-2 rounded-full bg-candy-pink animate-pulse"></span>
+                    <span class="mode-badge" id="mode-badge">lobby</span>
+                </div>
+                <div class="hidden sm:flex items-center gap-2 bg-amber-50 text-amber-600 font-semibold px-3.5 py-1.5 rounded-full border border-amber-200">
+                    <span class="inline-block text-xs" id="opponent-status-icon">⏳</span>
+                    <span id="opponent-status">Waiting for opponent...</span>
+                </div>
+                <button id="copy-link" style="display:none;" class="bg-candy-sky text-white font-bold px-3.5 py-1.5 rounded-full shadow-pop-blue active:translate-y-0.5 transition text-xs">📋 Copy Invite</button>
+                <button id="quit-btn" onclick="quitGame()" title="Quit game and return home" class="bg-white text-rose-600 font-bold px-3.5 py-1.5 rounded-full border-2 border-rose-200 hover:bg-rose-50 active:translate-y-0.5 transition text-xs">🚪 Quit</button>
+            </div>
+        </header>
+
+        <!-- MainContentArea (turn banner + thinking live in the side panel) -->
+        <div id="game-area" class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start flex-grow">
+            <!-- Board -->
+            <section aria-label="Battlefield Grid" class="lg:col-span-8 xl:col-span-9 bg-white p-3 sm:p-5 rounded-3xl shadow-pop border-2 border-purple-100 flex flex-col" id="board-area">
+                <div id="board-with-coords">
+                    <div id="col-labels" aria-hidden="true"></div>
+                    <div id="board-midrow">
+                        <div id="row-labels" aria-hidden="true"></div>
+                        <div class="board-grid aspect-[16/13] w-full" id="board-grid"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- RightSidePanel -->
+            <aside class="lg:col-span-4 xl:col-span-3 flex flex-col gap-4 right-panel">
+                <div class="bg-gradient-to-br from-white to-blue-50/80 p-5 rounded-3xl shadow-pop border-2 border-blue-100 turn-banner" id="turn-banner">
+                    <div class="flex items-center gap-3 mb-2">
+                        <div class="w-10 h-10 rounded-2xl bg-gradient-to-b from-candy-sky to-candy-deepSky flex items-center justify-center shadow-pop-blue text-white text-lg" id="turn-icon">🔵</div>
+                        <div>
+                            <div class="text-xs font-bold text-sky-500 uppercase font-fredoka tracking-wider">Active Turn</div>
+                            <h2 class="font-fredoka text-lg sm:text-xl font-bold text-slate-800 leading-tight" id="turn-text">Waiting...</h2>
+                        </div>
+                    </div>
+                    <div><span id="turn-badge" class="theirs">Waiting...</span></div>
+                    <div class="thinking-indicator" id="thinking-indicator">🤔 Opponent is thinking...</div>
+                    <div class="bg-white/80 rounded-2xl p-4 border border-blue-100 mt-2" id="active-ability-box">
+                        <div class="text-xs font-fredoka font-semibold text-candy-purple mb-1 flex items-center gap-1.5 ability-label"><span>✨</span> Active Ability</div>
+                        <button class="effect-chip" id="effect-chip" type="button" onclick="toggleArmedFromChip()" title="Tap to arm this ability, then tap a piece" style="background:#EDE9FE;color:#7D5FFF;">—</button>
+                        <p class="text-xs font-medium text-slate-600 leading-snug mt-1.5" id="effect-chip-tip"></p>
+                        <p id="effect-arm-hint"></p>
+                    </div>
+                    <div id="match-stats" class="mt-3">
+                        <div class="ms"><div class="v" id="turn-counter">0</div><div class="k">Turn</div></div>
+                        <div class="ms"><div class="v" id="brick-counter">0</div><div class="k">🧱 Bricks</div></div>
+                        <div class="ms"><div class="v" id="star-counter">0/10</div><div class="k">⭐ Stars (You / Enemy)</div></div>
+                    </div>
+                </div>
+
+                <div class="bg-white p-5 rounded-3xl shadow-pop border-2 border-amber-200 relative overflow-hidden stats-card" id="selected-card" style="display:none;">
+                    <div class="flex items-center justify-between mb-4">
+                        <div class="flex items-center gap-2">
+                            <span class="w-3 h-3 rounded-full bg-amber-400"></span>
+                            <h3 class="font-fredoka text-lg font-bold text-slate-800">Selected Piece</h3>
+                        </div>
+                        <span class="bg-amber-100 text-amber-800 font-fredoka font-bold text-xs px-2.5 py-1 rounded-full" id="selected-rank-pill" style="display:none;">Rank</span>
+                    </div>
+                    <div id="piece-stats"></div>
+                </div>
+
+                <div class="bg-purple-50/80 rounded-3xl p-4 sm:p-5 border-2 border-purple-200 tips-box" id="tips-box">
+                    <div class="flex items-center gap-2 text-candy-purple font-fredoka font-bold text-sm mb-2"><span class="text-lg">💡</span> Tactical Tip</div>
+                    <p class="text-xs font-medium text-slate-600 leading-relaxed font-quicksand tip-text">Merge combines two of your pieces into one. Strength and armor add together.</p>
+                    <div class="mt-3 pt-3 border-t border-purple-200/70">
+                        <div class="text-xs font-fredoka font-bold text-purple-700 uppercase tracking-wider mb-2">Spike cap = 10 − strength</div>
+                        <div class="caps-legend grid grid-cols-4 gap-2" id="caps-legend"></div>
+                    </div>
+                </div>
+
+                <div class="bg-white/80 rounded-3xl p-4 border-2 border-purple-100 shadow-pop">
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <div class="flex items-center gap-2 text-slate-500 font-fredoka font-bold text-sm"><span class="text-lg">📜</span> Move History <span id="history-count" class="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">0</span></div>
+                        <button onclick="openHistory()" class="text-[11px] font-fredoka font-bold text-purple-700 bg-purple-50 hover:bg-purple-100 border border-purple-200 rounded-full px-2.5 py-1 transition" type="button">View all</button>
+                    </div>
+                    <div class="history-feed max-h-[200px] overflow-y-auto" id="history-feed"></div>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <script>
+        // ============ Game Client ============
+        const SOCKET_URL = window.location.origin;
+        let socket = null;
+        let gameState = null;
+        let selection = null; // { col, row, piece }
+        let armedEffect = null;
+        let myAffiliation = null;
+        let roomId = null;
+        let gameMode = null;
+        let myPlayerId = null;
+        let lastTurnEffect = null;   // detect when a new turn's effect arrives
+        let lastTurnCount = null;    // detect turn transitions
+
+        // Serializes board transitions so a fast opponent move never starts
+        // animating before the previous move's animation has finished.
+        let animationQueue = Promise.resolve();
+        function enqueueAnimation(task) {
+            animationQueue = animationQueue.then(task).catch(() => {});
+            return animationQueue;
+        }
+
+        // Persist our seat so closing the tab / reopening the same link
+        // reclaims the SAME player slot instead of looking like a new player.
+        function seatKey(rid) { return `nw:seat:${rid}`; }
+        function saveSeat(rid, pid, affiliation) {
+            try {
+                if (rid && pid) localStorage.setItem(seatKey(rid), JSON.stringify({ playerId: pid, affiliation }));
+            } catch (e) { /* private mode — reconnect just won't survive reload */ }
+        }
+        function loadSeat(rid) {
+            try {
+                const raw = rid && localStorage.getItem(seatKey(rid));
+                return raw ? JSON.parse(raw) : null;
+            } catch (e) { return null; }
+        }
+
+        const host = window.location.host;
+        // Backend URL: explicit override (Vercel client → Railway backend),
+        // otherwise fall back to the same origin that served this page.
+        const BACKEND_URL = (window.NW_CONFIG && window.NW_CONFIG.BACKEND_URL)
+            ? window.NW_CONFIG.BACKEND_URL
+            : (host.includes('localhost') ? `http://${host}` : SOCKET_URL);
+
+        // ============ Tips ============
+        // Each tip now states the exact caps so a player is never surprised
+        // by a stat clamping down mid-action.
+        const TIPS = {
+            Merge: "Merge adds two pieces' strength (cap 8) and armor (cap 10), keeps the better range, and spikes shed to the new strength's cap.",
+            Split: "Split halves every stat — only even strengths (2→1, 4→2, 6→3, 8→4) can split. Spikes round down.",
+            Weaken: "Weaken drops 1 from strength, armor and range (min 1) on yours OR the enemy's. Spikes are untouched — never reduced. Lowering strength raises the spike cap by 1. A 1/1/1 piece is invulnerable.",
+            Strengthen: "Strengthen doubles strength (cap 8) at a cost: armor drops by the strength gained, and spikes shed to the new strength's cap.",
+            default: "Strength caps at 8. Spike cap = 10 − strength: a 1 holds 9 spikes, an 8 holds only 2."
+        };
+
+        // Per-effect icon, label and accent color for the arrival toast + chip.
+        const EFFECT_META = {
+            Merge: { icon: '➕', label: 'Merge', tip: 'move onto an ally to combine' },
+            Split: { icon: '➗', label: 'Split', tip: 'halve one of your pieces' },
+            Weaken: { icon: '➖', label: 'Weaken', tip: 'shrink any piece by 1 (1s are immune)' },
+            Strengthen: { icon: '✖️', label: 'Strengthen', tip: 'double attack, lose armor' },
+        };
+
+        function getTip(effect) {
+            return TIPS[effect] || TIPS.default;
+        }
+
+        // The spike cap table, shown as a compact legend so players learn
+        // which pieces can hoard spikes without being surprised by clamping.
+        function spikeCap(strength) {
+            return Math.max(2, 10 - strength);
+        }
+
+        // ============ Toast ============
+        let toastTimer = null;
+        function showToast(msg) {
+            const el = document.getElementById('toast');
+            el.textContent = msg;
+            el.classList.add('show');
+            if (toastTimer) clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+        }
+
+        // ============ Socket Connection ============
+        function connectSocket(pendingRoomId) {
+            // Reuse the live socket when we already have one.
+            if (socket && socket.connected) return socket;
+            const stored = pendingRoomId ? loadSeat(pendingRoomId) : null;
+            if (stored && stored.playerId) {
+                // The seat for THIS room wins over any id from another room.
+                myPlayerId = stored.playerId;
+                if (stored.affiliation) myAffiliation = stored.affiliation;
+            }
+            socket = io(BACKEND_URL, {
+                transports: ['websocket', 'polling'],
+                auth: myPlayerId ? { playerId: myPlayerId } : {},
+            });
+
+            socket.on('connect', () => {
+                console.log('[WS] Connected:', socket.id);
+            });
+
+            socket.on('roomCreated', (data) => {
+                roomId = data.roomId;
+                gameMode = data.mode || 'friend';
+                myAffiliation = data.affiliation || 'blue';
+                myPlayerId = data.playerId || myPlayerId;
+                saveSeat(roomId, myPlayerId, myAffiliation);
+                document.getElementById('room-id-display').textContent = `${roomId}`;
+                document.getElementById('mode-badge').textContent = gameMode;
+
+                if (gameMode === 'friend') {
+                    document.getElementById('copy-link').style.display = 'inline-block';
+                    document.getElementById('copy-link').onclick = () => {
+                        const link = `${window.location.origin}/play/${roomId}`;
+                        navigator.clipboard.writeText(link);
+                        showToast('Link copied!');
+                    };
+                }
+
+                if (gameMode === 'computer' && data.difficulty) {
+                    setOpponentStatus('Playing vs Computer (' + data.difficulty + ')', 'bot');
+                } else if (gameMode === 'ai') {
+                    setOpponentStatus('Playing vs AI', 'bot');
+                } else if (gameMode === 'computer') {
+                    setOpponentStatus('Playing vs Computer', 'bot');
+                } else {
+                    setOpponentStatus('Waiting for opponent...', 'waiting');
+                }
+            });
+
+            socket.on('roomJoined', (data) => {
+                roomId = data.roomId;
+                gameMode = data.mode;
+                myAffiliation = data.affiliation;
+                myPlayerId = data.playerId || myPlayerId;
+                saveSeat(roomId, myPlayerId, myAffiliation);
+                document.getElementById('room-id-display').textContent = `${roomId}`;
+                document.getElementById('mode-badge').textContent = gameMode;
+                setOpponentStatus('Connected', 'connected');
+                document.getElementById('copy-link').style.display = 'none';
+
+                // If AI mode, opponent is already there
+                if (gameMode === 'ai' || gameMode === 'computer') {
+                    setOpponentStatus('Playing vs ' + (gameMode === 'ai' ? 'AI' : 'Computer'), 'bot');
+                }
+            });
+
+            socket.on('gameState', (state) => {
+                const previousState = gameState;
+                gameState = state;
+
+                // Queue the render + animation so an opponent's instant reply
+                // waits for the current move to finish animating first.
+                enqueueAnimation(() => new Promise(resolve => {
+                    renderGame(state);
+                    const done = animatePieceTransition(previousState, state);
+                    if (done && typeof done.then === 'function') {
+                        done.then(resolve);
+                    } else {
+                        resolve();
+                    }
+                }));
+
+                // Clear selection on new state (piece may have moved)
+                selection = null;
+                armedEffect = null;
+                updateStatsCard();
+                updateEffectButtons();
+
+                // Safety net: bot opponents are always present. If the label
+                // is still stuck on "Waiting" (e.g. event race), lift it now.
+                if (gameMode === 'ai' || gameMode === 'computer') {
+                    const el = document.getElementById('opponent-status');
+                    if (el && el.textContent.includes('Waiting')) {
+                        setOpponentStatus('Playing vs ' + (gameMode === 'ai' ? 'AI' : 'Computer'), 'bot');
+                    }
+                }
+            });
+
+            socket.on('opponentJoined', () => {
+                // Bot opponents are always present — never overwrite their label.
+                if (gameMode === 'ai' || gameMode === 'computer') return;
+                setOpponentStatus('Opponent connected', 'connected');
+                if (gameMode === 'friend') {
+                    document.getElementById('copy-link').style.display = 'none';
+                }
+            });
+
+            socket.on('opponentReconnected', () => {
+                // Bot opponents never disconnect — keep the bot label.
+                if (gameMode === 'ai' || gameMode === 'computer') return;
+                setOpponentStatus('Opponent connected', 'connected');
+                showToast('Opponent reconnected');
+                if (gameMode === 'friend') {
+                    document.getElementById('copy-link').style.display = 'none';
+                }
+            });
+
+            socket.on('playerDisconnected', () => {
+                if (gameMode === 'ai' || gameMode === 'computer') return;
+                setOpponentStatus('⚠ Opponent disconnected', 'disconnected');
+            });
+
+            socket.on('opponentDisconnected', () => {
+                if (gameMode === 'ai' || gameMode === 'computer') return;
+                setOpponentStatus('⚠ Opponent disconnected', 'disconnected');
+            });
+
+            socket.on('error', (msg) => {
+                showToast(msg);
+            });
+
+            socket.on('disconnect', () => {
+                showToast('Disconnected from server');
+            });
+        }
+
+        function setOpponentStatus(text, kind) {
+            document.getElementById('opponent-status').textContent = text;
+            const icon = document.getElementById('opponent-status-icon');
+            if (!icon) return;
+            if (kind === 'bot') icon.textContent = '🤖';
+            else if (kind === 'connected') icon.textContent = '✅';
+            else if (kind === 'disconnected') icon.textContent = '⚠';
+            else icon.textContent = '⏳';
+        }
+
+        // ============ Create / Join Room ============
+        function createRoom(mode) {
+            connectSocket(null);
+            // Wait for the socket handshake before emitting (page-load race).
+            const payload = { mode };
+            if (mode === 'computer') {
+                // Include the selected difficulty for the local algorithm.
+                const diffSel = document.getElementById('computer-difficulty');
+                payload.difficulty = diffSel ? diffSel.value : 'medium';
+            }
+            if (socket.connected) socket.emit('createRoom', payload);
+            else socket.once('connect', () => socket.emit('createRoom', payload));
+            showLanding(false);
+        }
+
+        function joinByCode() {
+            const code = document.getElementById('room-code').value.trim().toLowerCase();
+            if (code.length < 4) { showToast('Enter a valid room code'); return; }
+            roomId = code;
+            connectSocket(code);
+            // Send our stored seat so the server recognises a reconnect.
+            const seat = loadSeat(code);
+            const payload = { roomId: code };
+            if (seat && seat.playerId) payload.playerId = seat.playerId;
+            else if (myPlayerId) payload.playerId = myPlayerId;
+            if (socket.connected) socket.emit('joinRoom', payload);
+            else socket.once('connect', () => socket.emit('joinRoom', payload));
+            showLanding(false);
+        }
+
+        // Check URL for /play/:roomId
+        function checkUrlForRoom() {
+            const match = window.location.pathname.match(/\/play\/([a-z0-9]+)/);
+            if (match) {
+                const code = match[1];
+                document.getElementById('room-code').value = code;
+                joinByCode();
+            }
+        }
+        checkUrlForRoom();
+
+        function showLanding(show) {
+            document.getElementById('landing').style.display = show ? 'flex' : 'none';
+            const glows = document.getElementById('landing-glows');
+            if (glows) glows.style.display = show ? 'block' : 'none';
+            const main = document.getElementById('main-container');
+            main.style.display = show ? 'none' : 'flex';
+            // Lock page scroll while playing so the whole board fits at 100% zoom.
+            document.body.classList.toggle('game-active', !show);
+        }
+
+        // ============ Rules modal (beginner guide) ============
+        function openRules() {
+            const m = document.getElementById('rules-modal');
+            m.classList.remove('hidden');
+            m.classList.add('flex');
+        }
+        function closeRules() {
+            const m = document.getElementById('rules-modal');
+            m.classList.add('hidden');
+            m.classList.remove('flex');
+        }
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { closeRules(); closeHistory(); }
+        });
+
+        // ============ Board Rendering ============
+        const COLUMNS = [21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36];
+        const ROWS = [1,2,3,4,5,6,7,8,9,10,11,12,13];
+
+        // Display-only square names. Backend keeps authoritative "col,row"
+        // (e.g. 21,1); frontend shows chess-style labels (21,1 -> a1).
+        // col 21..36 -> file a..p, row stays 1..13.
+        function displaySquare(col, row) {
+            const c = Number(col);
+            const r = Number(row);
+            if (Number.isInteger(c) && Number.isInteger(r) && c >= 21 && c <= 36 && r >= 1 && r <= 13) {
+                return `${String.fromCharCode(97 + (c - 21))}${r}`;
+            }
+            return `${col},${row}`;
+        }
+
+        // Replace every backend "col,row" coord in a history string with its
+        // display label, so "21,1" renders as "a1" without touching backend data.
+        function prettifyCoords(text) {
+            return String(text).replace(/(\d{1,3}),(\d{1,3})/g, (m, c, r) => {
+                const cn = Number(c);
+                const rn = Number(r);
+                if (cn >= 21 && cn <= 36 && rn >= 1 && rn <= 13) return displaySquare(cn, rn);
+                return m;
+            });
+        }
+
+        // Make backend history events read like a battle report, e.g.
+        // "Blue 7 from 21,1 attacked Red 5 at 22,2: chipped 3 armor, bounced to 21,1"
+        // -> "Blue piece 7 attacked Red piece 5 at b2 and chipped 3 armor, bounced back to a1".
+        // Display-only: animations still parse the RAW event from state.
+        function formatHistoryEvent(raw) {
+            const s0 = String(raw);
+            // Pass through non-combat system messages with just coord prettifying.
+            if (/^game started/i.test(s0) || /wins!/i.test(s0) || /star/i.test(s0) || /^Max spikes/i.test(s0) || /^Spikes shed/i.test(s0) || /^Square bricked/i.test(s0) || /^Shards? /i.test(s0)) {
+                return prettifyCoords(s0);
+            }
+            let s = prettifyCoords(s0);
+            const norm = (t) => t.replace(/\bBlue piece (\d+)/g, 'Blue piece $1')
+                .replace(/\bRed piece (\d+)/g, 'Red piece $1')
+                .replace(/\bBlue (\d+)/g, 'Blue piece $1')
+                .replace(/\bRed (\d+)/g, 'Red piece $1');
+            s = norm(s);
+            // died to spikes: "Blue piece 7 from a1 died to spikes attacking Red piece 5 at b2 (spikes 3 ate 2 armor + 1 strength)"
+            let m = s.match(/^(Blue piece \d+|Red piece \d+) from (\S+) died to spikes attacking (Blue piece \d+|Red piece \d+) at (\S+)(.*)$/);
+            if (m) return `${m[1]} charged from ${m[2]} into ${m[3]} at ${m[4]} and died on its spikes${m[5] ? ` ${m[5].trim()}` : ''}`;
+            // capture: "Blue piece 7 from a1 captured Red piece 5 at b2 ..."
+            m = s.match(/^(Blue piece \d+|Red piece \d+) from (\S+) captured (Blue piece \d+|Red piece \d+) at (\S+)(.*)$/);
+            if (m) {
+                const extra = m[5] ? ` ${m[5].trim()}` : '';
+                return `${m[1]} attacked ${m[3]} at ${m[4]} from ${m[2]} and captured it${extra}`;
+            }
+            // repelled / bounced: "Blue piece 7 from a1 attacked Red piece 5 at b2: chipped ... , repelled/bounced to c3"
+            m = s.match(/^(Blue piece \d+|Red piece \d+) from (\S+) attacked (Blue piece \d+|Red piece \d+) at (\S+):?\s*(.*?)\s*,?\s*(repelled|bounced)(?: back)? to (\S+)\s*$/);
+            if (m) {
+                const detail = m[5] ? ` and ${m[5].replace(/^chipped /, 'chipped ')}` : '';
+                return `${m[1]} attacked ${m[3]} at ${m[4]}${detail}, ${m[6]} back to ${m[7]} block`;
+            }
+            // generic attack without bounce (shouldn't happen, but keep readable)
+            m = s.match(/^(Blue piece \d+|Red piece \d+) from (\S+) attacked (Blue piece \d+|Red piece \d+) at (\S+)(.*)$/);
+            if (m) return `${m[1]} attacked ${m[3]} at ${m[4]}${m[5] || ''}`;
+            // move: "Blue piece 7 moved from a1 to b2"
+            m = s.match(/^(Blue piece \d+|Red piece \d+) moved from (\S+) to (\S+)\s*$/);
+            if (m) return `${m[1]} moved from ${m[2]} to ${m[3]} block`;
+            // merge: "Blue piece 7 from a1 merged with Blue piece 5 at b2 (merged)"
+            m = s.match(/^(Blue piece \d+|Red piece \d+) from (\S+) merged with (Blue piece \d+|Red piece \d+) at (\S+)(.*)$/);
+            if (m) return `${m[1]} from ${m[2]} merged into ${m[3]} at ${m[4]} block${m[5] ? ` ${m[5].trim()}` : ''}`;
+            // effects
+            if (/^Effect used:/i.test(s)) return s;
+            return s;
+        }
+
+        // Global tooltip: one fixed element following the hovered piece.
+        // (Per-piece .tip divs would be clipped by .cell { overflow: hidden }.)
+        function tooltipHTML(p, col, row) {
+            const cap = spikeCap(p.strength);
+            const moveKind = p.strength >= 5 ? 'Can move orthogonally' : 'Can move in any direction';
+            const side = p.affiliation === 'blue' ? '🔵 Blue' : '🔴 Red';
+            return `<div class="ttitle">${side} piece ${p.strength} · ${displaySquare(col, row)}</div>` +
+                `<div class="trow"><span>⭐ Strength</span><span>${p.strength}</span></div>` +
+                `<div class="trow"><span>🛡️ Armor</span><span>${p.armor}</span></div>` +
+                `<div class="trow"><span>⚡ Spike</span><span>${p.spike}/${cap}</span></div>` +
+                `<div class="trow"><span>📏 Range</span><span>${p.range}</span></div>` +
+                `<div class="tnote">${moveKind}</div>`;
+        }
+        function showPieceTooltip(pieceEl, p, col, row) {
+            const tip = document.getElementById('piece-tooltip');
+            if (!tip) return;
+            tip.innerHTML = tooltipHTML(p, col, row);
+            tip.style.display = 'block';
+            const r = pieceEl.getBoundingClientRect();
+            const tw = tip.offsetWidth;
+            const th = tip.offsetHeight;
+            let x = r.left + (r.width / 2) - (tw / 2);
+            let y = r.top - th - 8;
+            if (y < 8) y = r.bottom + 8; // flip below near top edge
+            x = Math.max(8, Math.min(x, window.innerWidth - tw - 8));
+            tip.style.left = `${x}px`;
+            tip.style.top = `${y}px`;
+        }
+        function hidePieceTooltip() {
+            const tip = document.getElementById('piece-tooltip');
+            if (tip) tip.style.display = 'none';
+        }
+
+        function renderGame(state) {
+            if (!state) return;
+
+            const grid = document.getElementById('board-grid');
+            grid.innerHTML = '';
+
+            // Outside coordinate headers (display only — backend keeps 21,1 coords).
+            // Built once: columns A–P on top, rows 1–13 on the left.
+            const colLabels = document.getElementById('col-labels');
+            if (colLabels && !colLabels.children.length) {
+                for (const col of COLUMNS) {
+                    const h = document.createElement('div');
+                    h.className = 'coord-head';
+                    h.textContent = String.fromCharCode(65 + (col - 21));
+                    colLabels.appendChild(h);
+                }
+            }
+            const rowLabels = document.getElementById('row-labels');
+            if (rowLabels && !rowLabels.children.length) {
+                for (const row of ROWS) {
+                    const h = document.createElement('div');
+                    h.className = 'coord-head';
+                    h.textContent = `${row}`;
+                    rowLabels.appendChild(h);
+                }
+            }
+
+            const isMyTurn = myAffiliation && state.turn === myAffiliation && !state.gameOver;
+
+            // Turn badge lives inside the side panel (no full-width banner).
+            const badge = document.getElementById('turn-badge');
+            if (badge) {
+                if (!myAffiliation) {
+                    badge.className = 'theirs';
+                    badge.textContent = 'Waiting...';
+                } else if (state.gameOver) {
+                    const winner = state.gameWinner === 'blue' ? '🔵 Blue' : '🔴 Red';
+                    badge.className = 'done';
+                    badge.textContent = `${winner} wins!`;
+                } else if (isMyTurn) {
+                    badge.className = 'mine';
+                    const goEffect = state.turnEffect || 'Merge';
+                    badge.textContent = `✓ Your turn — go! · Move or ${goEffect}`;
+                } else {
+                    badge.className = 'theirs';
+                    badge.textContent = "⏳ Opponent's turn — wait...";
+                }
+            }
+
+            const thinkingEl = document.getElementById('thinking-indicator');
+            thinkingEl.classList.toggle('active', state.turn !== myAffiliation && !state.gameOver);
+
+            for (const row of ROWS) {
+                for (const col of COLUMNS) {
+                    const cell = document.createElement('div');
+                    const key = `${col},${row}`;
+                    const square = state.board[key];
+
+                    // Visual starting-row tint only. It has no gameplay effect;
+                    // either affiliation may move onto any free square.
+                    let zone = 'neutral';
+                    if (row <= 3) zone = 'red';
+                    else if (row >= 11) zone = 'blue';
+                    cell.className = `cell zone-${zone}`;
+
+                    if (square?.bricked) {
+                        cell.classList.add('brick');
+                    } else if (square?.shard) {
+                        cell.classList.add(`shard-${square.shard}`);
+                    } else if (square?.star) {
+                        cell.classList.add('star');
+                    }
+
+                    // Piece rendering
+                    if (square?.tenant) {
+                        const p = square.tenant;
+                        const pieceEl = document.createElement('div');
+                        pieceEl.className = `piece ${p.affiliation}`;
+
+                        // Check if this piece is selected
+                        const isSelected = !!(selection && selection.col === col && selection.row === row);
+                        if (isSelected) {
+                            pieceEl.classList.add('selected');
+                        }
+
+                        // Armed effect (Split/Weaken/Strengthen): highlight every
+                        // piece as a potential target — Split only arms own
+                        // pieces, Weaken/Strengthen arm ally or enemy.
+                        const affectsAll = armedEffect && (armedEffect === 'weaken' || armedEffect === 'strengthen');
+                        const affectsOwn = armedEffect === 'split' && p.affiliation === myAffiliation;
+                        if (isMyTurn && (affectsAll || affectsOwn) && !isSelected) {
+                            pieceEl.classList.add('effect-target');
+                            pieceEl.style.cursor = 'pointer';
+                        }
+
+                        // On Merge turns, mark ally pieces the selected piece can merge
+                        // into with a yellow landing halo.
+                        if (!isSelected && isMyTurn && selection && state.turnEffect === 'Merge'
+                            && p.affiliation === myAffiliation
+                            && selection.piece.affiliation === myAffiliation
+                            && canMergeInto(selection.piece, [col, row])) {
+                            pieceEl.classList.add('landing-target');
+                            pieceEl.style.cursor = 'pointer';
+                        }
+
+                        // Mark enemy pieces the selected piece can legally attack
+                        // (land on to capture) with a yellow halo. Capture is always
+                        // allowed, even on Merge turns (merge only affects allies).
+                        if (!isSelected && isMyTurn && selection
+                            && p.affiliation !== myAffiliation
+                            && selection.piece.affiliation === myAffiliation
+                            && canCaptureOnto(selection.piece, [col, row])) {
+                            pieceEl.classList.add('landing-target');
+                            pieceEl.style.cursor = 'pointer';
+                        }
+
+                        // Piece content — slim tile: spike badge (if any) + big
+                        // strength with small green range to its right + armor.
+                        pieceEl.innerHTML = `
+                            <div class="prow">${p.spike > 0 ? `<span class="spike">⚡${p.spike}</span>` : `<span></span>`}</div>
+                            <div class="str"><span class="snum">${p.strength}</span><span class="rng">${p.range}</span></div>
+                            <div class="armor">🛡️ ${p.armor}</div>
+                        `;
+                        // Hover tooltip with full stats (global fixed element).
+                        // Skip the tooltip for the currently selected piece — its
+                        // stats are already shown in the side panel.
+                        if (!isSelected) {
+                            pieceEl.addEventListener('mouseenter', () => showPieceTooltip(pieceEl, p, col, row));
+                            pieceEl.addEventListener('mouseleave', hidePieceTooltip);
+                        }
+
+                        // Click handler
+                        if (isMyTurn && p.affiliation === myAffiliation) {
+                            pieceEl.style.cursor = 'pointer';
+                            pieceEl.onclick = (e) => {
+                                e.stopPropagation();
+                                handlePieceClick(col, row, p);
+                            };
+                        } else if (isMyTurn && p.affiliation !== myAffiliation) {
+                            // Enemy piece: click = capture attempt (when a piece is
+                            // selected) OR an armed Weaken/Strengthen effect target.
+                            pieceEl.style.cursor = 'pointer';
+                            pieceEl.onclick = (e) => {
+                                e.stopPropagation();
+                                handleDestinationClick(col, row);
+                            };
+                        }
+
+                        cell.appendChild(pieceEl);
+                    } else if (isMyTurn && selection) {
+                        // Empty tile = potential move destination.
+                        // Only highlight if this square is a LEGAL move for the
+                        // selected piece — correct rook (straight only) vs
+                        // queen (straight + diagonal) movement, in range, and
+                        // with a clear path.
+                        const sel = selection;
+                        if (canSelectMoveTo(sel.piece, [col, row])) {
+                            cell.style.cursor = 'pointer';
+                            cell.style.background = 'rgba(124, 58, 237, 0.15)';
+                            cell.onclick = () => handleDestinationClick(col, row);
+                        }
+                    }
+
+                    cell.dataset.col = col;
+                    cell.dataset.row = row;
+                    grid.appendChild(cell);
+                }
+            }
+
+            // Update UI panels (counters live in the side panel match-stats).
+            updateBanner(state);
+            updateHistory(state);
+            document.getElementById('turn-counter').textContent = `${state.turnCount}`;
+            document.getElementById('brick-counter').textContent = `${state.bricks || 0}`;
+            const myStarCount = myAffiliation === 'red' ? (state.redStars || 0) : (state.blueStars || 0);
+            const enemyStarCount = myAffiliation === 'red' ? (state.blueStars || 0) : (state.redStars || 0);
+            const starsToWin = state.starsToWin || 10;
+            document.getElementById('star-counter').textContent = `${myStarCount} / ${enemyStarCount} (${starsToWin})`;
+            document.getElementById('tips-box').querySelector('.tip-text').textContent = getTip(state.turnEffect);
+            updateEffectButtons(state);
+            renderEffectChip(state);
+            renderCapsLegend();
+        }
+
+        // The server deliberately broadcasts only the authoritative end state.
+        // Animate the visual transition locally so movement remains responsive
+        // without making the server wait or allowing clients to mutate state.
+        // Distance between two squares (Chebyshev — matches movement rules).
+        function chebyshev(a, b) {
+            return Math.max(Math.abs(a.col - b.col), Math.abs(a.row - b.row));
+        }
+
+        // Smooth, frame-by-frame (pixel-to-pixel) tween of `el` from its
+        // current transform to a target transform, resolving when done.
+        // Drives transform via requestAnimationFrame so the piece glides the
+        // whole way instead of teleporting to the destination.
+        function tweenTransform(el, fromX, fromY, toX, toY, duration) {
+            return new Promise(resolve => {
+                const start = performance.now();
+                const tick = (now) => {
+                    const t = Math.min((now - start) / duration, 1);
+                    const x = fromX + (toX - fromX) * t;
+                    const y = fromY + (toY - fromY) * t;
+                    el.style.transform = `translate(${x}px, ${y}px)`;
+                    if (t < 1) requestAnimationFrame(tick);
+                    else resolve();
+                };
+                requestAnimationFrame(tick);
+            });
+        }
+
+        function animatePieceTransition(previous, next) {
+            if (!previous || !next) return Promise.resolve();
+            const grid = document.getElementById('board-grid');
+            const finalPieces = [];
+            const oldPieces = [];
+            const lastEvent = next.gameHistory?.[next.gameHistory.length - 1]?.event || '';
+            const isBounceResult = lastEvent.includes('repelled') || lastEvent.includes('bounced');
+            for (const row of ROWS) for (const col of COLUMNS) {
+                const oldPiece = previous.board[`${col},${row}`]?.tenant;
+                const newPiece = next.board[`${col},${row}`]?.tenant;
+                if (oldPiece) oldPieces.push({ piece: oldPiece, col, row });
+                if (newPiece) finalPieces.push({ piece: newPiece, col, row });
+            }
+
+            const movementPromises = [];
+
+            for (const finalPiece of finalPieces) {
+                // Bounce results have a dedicated collision animation. Do
+                // not also play the ordinary source-to-final movement, or
+                // the attacker appears to take two conflicting paths.
+                if (isBounceResult) continue;
+                const candidate = oldPieces
+                    .filter(old => old.piece.affiliation === finalPiece.piece.affiliation
+                        && (old.col !== finalPiece.col || old.row !== finalPiece.row)
+                        // A merge leaves the destination occupied in both
+                        // states, so also accept the ally piece whose
+                        // original square became empty.
+                        && (!next.board[`${old.col},${old.row}`]?.tenant
+                            || next.board[`${old.col},${old.row}`].tenant.affiliation !== old.piece.affiliation)
+                        // Do not steal a moving piece's animation for an
+                        // unchanged piece elsewhere on the board.
+                        // A same-affiliation tenant at the destination is a
+                        // stat update (or merge), not a piece arriving there.
+                        && (!previous.board[`${finalPiece.col},${finalPiece.row}`]?.tenant
+                            || previous.board[`${finalPiece.col},${finalPiece.row}`].tenant.affiliation !== finalPiece.piece.affiliation
+                            || pieceDifference(previous.board[`${finalPiece.col},${finalPiece.row}`].tenant, finalPiece.piece) > 0))
+                    .sort((a, b) => pieceDifference(a.piece, finalPiece.piece) - pieceDifference(b.piece, finalPiece.piece))[0];
+                if (!candidate) continue;
+
+                const destinationCell = grid.querySelector(`.cell[data-col="${finalPiece.col}"][data-row="${finalPiece.row}"]`);
+                const finalEl = destinationCell?.querySelector('.piece');
+                if (!destinationCell || !finalEl) continue;
+
+                const clone = finalEl.cloneNode(true);
+                clone.classList.add('movement-clone');
+                finalEl.classList.add('movement-arrival-hidden');
+                clone.style.width = `${destinationCell.clientWidth}px`;
+                clone.style.height = `${destinationCell.clientHeight}px`;
+                clone.style.left = `${destinationCell.offsetLeft}px`;
+                clone.style.top = `${destinationCell.offsetTop}px`;
+                // The clone is physically placed at the destination cell, so
+                // "at rest" it sits at translate(0,0). Start it translated
+                // back to the source square, then glide it to (0,0) in one
+                // continuous motion.
+                clone.style.transition = 'none';
+                const startX = (candidate.col - finalPiece.col) * (destinationCell.clientWidth + 2);
+                const startY = (candidate.row - finalPiece.row) * (destinationCell.clientHeight + 2);
+                clone.style.transform = `translate(${startX}px, ${startY}px)`;
+                grid.appendChild(clone);
+
+                // Longer moves get proportionally more time, but never so
+                // fast that the glide blurs. Scale with distance.
+                const distance = chebyshev(candidate, finalPiece);
+                const duration = Math.min(Math.max(distance * 170, 180), 900);
+
+                movementPromises.push(
+                    tweenTransform(clone, startX, startY, 0, 0, duration).then(() => {
+                        clone.remove();
+                        finalEl.classList.remove('movement-arrival-hidden');
+                    })
+                );
+            }
+
+            const combatPromise = animateCombatSequence(previous, next, oldPieces);
+            const statPromise = animateStatChanges(previous, next);
+
+            return Promise.all([...movementPromises, combatPromise, statPromise]);
+        }
+
+        function pieceDifference(a, b) {
+            return (a.strength !== b.strength ? 4 : 0)
+                + (a.armor !== b.armor ? 2 : 0)
+                + (a.spike !== b.spike ? 1 : 0)
+                + (a.range !== b.range ? 1 : 0);
+        }
+
+        function movementPath(candidate, finalPiece) {
+            const path = [];
+            let col = candidate.col;
+            let row = candidate.row;
+            while (col !== finalPiece.col || row !== finalPiece.row) {
+                col += Math.sign(finalPiece.col - col);
+                row += Math.sign(finalPiece.row - row);
+                path.push({ col, row });
+            }
+            return path;
+        }
+
+        function animateCombatSequence(previous, next, oldPieces) {
+            const event = next.gameHistory?.[next.gameHistory.length - 1]?.event || '';
+            if (event.includes('captured')) {
+                const capturedAt = event.match(/at (\d+),(\d+)/);
+                if (capturedAt) {
+                    const cell = document.querySelector(`.cell[data-col="${capturedAt[1]}"][data-row="${capturedAt[2]}"]`);
+                    const piece = cell?.querySelector('.piece');
+                    if (piece) piece.classList.add('combat-hit');
+                }
+                // The capture hit is CSS-only; movement + stats already cover
+                // the rest. Resolve after the hit animation's duration.
+                return new Promise(resolve => setTimeout(resolve, 420));
+            }
+            // Attacker died on spikes: slide into the defender then fade out.
+            // The authoritative state has no attacker left, so build the clone
+            // from the previous state's piece data and origin geometry.
+            if (event.includes('died to spikes')) {
+                const from = event.match(/from (\d+),(\d+)/);
+                const at = event.match(/at (\d+),(\d+)/);
+                if (!from || !at) return Promise.resolve();
+                const fromCol = Number(from[1]);
+                const fromRow = Number(from[2]);
+                const defCol = Number(at[1]);
+                const defRow = Number(at[2]);
+                const originCell = document.querySelector(`.cell[data-col="${fromCol}"][data-row="${fromRow}"]`);
+                const defCell = document.querySelector(`.cell[data-col="${defCol}"][data-row="${defRow}"]`);
+                const defEl = defCell?.querySelector('.piece');
+                if (!originCell || !defCell) return Promise.resolve();
+                if (defEl) defEl.classList.add('combat-hit');
+                const oldAttacker = previous.board[`${fromCol},${fromRow}`]?.tenant;
+                const moverAff = oldAttacker?.affiliation || (/^Red /.test(event) ? 'red' : 'blue');
+                const clone = document.createElement('div');
+                clone.className = `piece ${moverAff} movement-clone`;
+                const str = oldAttacker?.strength ?? '?';
+                const armor = oldAttacker?.armor ?? '?';
+                const spike = oldAttacker?.spike ?? 0;
+                const rng = oldAttacker?.range ?? '?';
+                clone.innerHTML = `<div class="prow">${spike > 0 ? `<span class="spike">⚡${spike}</span>` : `<span></span>`}</div><div class="str"><span class="snum">${str}</span><span class="rng">${rng}</span></div><div class="armor">🛡️ ${armor}</div>`;
+                clone.style.width = `${originCell.clientWidth}px`;
+                clone.style.height = `${originCell.clientHeight}px`;
+                clone.style.left = `${originCell.offsetLeft}px`;
+                clone.style.top = `${originCell.offsetTop}px`;
+                clone.style.transform = `translate(0px, 0px)`;
+                document.getElementById('board-grid').appendChild(clone);
+                const path = [];
+                let col = fromCol;
+                let row = fromRow;
+                while (col !== defCol || row !== defRow) {
+                    col += Math.sign(defCol - col);
+                    row += Math.sign(defRow - row);
+                    path.push({ col, row });
+                }
+                return new Promise(resolve => {
+                    let index = 0;
+                    const hop = () => {
+                        if (index >= path.length) {
+                            clone.style.transition = 'opacity 300ms';
+                            clone.style.opacity = '0';
+                            setTimeout(() => { clone.remove(); resolve(); }, 320);
+                            return;
+                        }
+                        const point = path[index++];
+                        clone.style.transform = `translate(${(point.col - fromCol) * (originCell.clientWidth + 2)}px, ${(point.row - fromRow) * (originCell.clientHeight + 2)}px)`;
+                        setTimeout(hop, 190);
+                    };
+                    requestAnimationFrame(() => requestAnimationFrame(hop));
+                });
+            }
+            if (!event.includes('repelled') && !event.includes('bounced')) return Promise.resolve();
+
+            // Parse coordinates straight from the authoritative history event:
+            // "... from <attackerStart> attacked ... at <defender> ... to <bounceFinal>"
+            // This avoids fragile stat-matching (spike damage changes stats).
+            const fromMatch = event.match(/from (\d+),(\d+)/);
+            const atMatch = event.match(/at (\d+),(\d+)/);
+            const toMatch = event.match(/to (\d+),(\d+)/);
+            if (!fromMatch || !atMatch || !toMatch) return Promise.resolve();
+            const fromCol = Number(fromMatch[1]);
+            const fromRow = Number(fromMatch[2]);
+            const defCol = Number(atMatch[1]);
+            const defRow = Number(atMatch[2]);
+            const finalCol = Number(toMatch[1]);
+            const finalRow = Number(toMatch[2]);
+
+            const grid = document.getElementById('board-grid');
+            const originCell = grid.querySelector(`.cell[data-col="${fromCol}"][data-row="${fromRow}"]`);
+            const defCell = grid.querySelector(`.cell[data-col="${defCol}"][data-row="${defRow}"]`);
+            const finalCell = grid.querySelector(`.cell[data-col="${finalCol}"][data-row="${finalRow}"]`);
+            if (!originCell || !defCell || !finalCell) return Promise.resolve();
+            const defEl = defCell?.querySelector('.piece');
+
+            // The board already re-rendered to the final state, so the origin
+            // square is empty — fly a clone built from the PRE-combat attacker
+            // stats, starting at the attacker's origin square. Built fresh (not
+            // cloneNode from the hidden arrival element) so it can never
+            // inherit `movement-arrival-hidden` and render invisible.
+            const finalEl = finalCell.querySelector('.piece');
+            if (!finalEl) return Promise.resolve();
+            finalEl.classList.add('movement-arrival-hidden');
+            const oldAttacker = previous.board[`${fromCol},${fromRow}`]?.tenant;
+            const newAttacker = next.board[`${finalCol},${finalRow}`]?.tenant;
+            const oldDef = previous.board[`${defCol},${defRow}`]?.tenant;
+            const newDef = next.board[`${defCol},${defRow}`]?.tenant;
+            const moverAff = (oldAttacker || newAttacker)?.affiliation
+                || (finalEl.classList.contains('red') ? 'red' : 'blue');
+            const flight = oldAttacker || newAttacker || { strength: '?', armor: '?', spike: 0, range: '?' };
+            // Rewind the defender tile to pre-chip numbers so the reduction
+            // visibly happens on impact, not before the attacker arrives.
+            if (defEl && oldDef && newDef) {
+                const str = defEl.querySelector('.str .snum') || defEl.querySelector('.str');
+                const rng = defEl.querySelector('.str .rng');
+                const armor = defEl.querySelector('.armor');
+                const spike = defEl.querySelector('.spike');
+                if (str) str.textContent = oldDef.strength;
+                if (rng) rng.textContent = oldDef.range;
+                if (armor) armor.textContent = `🛡️ ${oldDef.armor}`;
+                if (spike) spike.textContent = oldDef.spike > 0 ? `⚡${oldDef.spike}` : '';
+            }
+            const clone = document.createElement('div');
+            clone.className = `piece ${moverAff} movement-clone`;
+            clone.innerHTML = `<div class="prow">${flight.spike > 0 ? `<span class="spike">⚡${flight.spike}</span>` : `<span></span>`}</div><div class="str"><span class="snum">${flight.strength}</span><span class="rng">${flight.range}</span></div><div class="armor">🛡️ ${flight.armor}</div>`;
+            clone.style.width = `${originCell.clientWidth}px`;
+            clone.style.height = `${originCell.clientHeight}px`;
+            clone.style.left = `${originCell.offsetLeft}px`;
+            clone.style.top = `${originCell.offsetTop}px`;
+            clone.style.transform = `translate(0px, 0px)`;
+            grid.appendChild(clone);
+
+            // Waypoints: origin -> defender square (touch) -> bounce-back square.
+            // Same 190ms per-square pace as a normal move so eyes can follow.
+            const stepW = originCell.clientWidth + 2;
+            const stepH = originCell.clientHeight + 2;
+            const placeAt = (col, row) => {
+                clone.style.transform = `translate(${(col - fromCol) * stepW}px, ${(row - fromRow) * stepH}px)`;
+            };
+            const steppedPath = (fc, fr, tc, tr) => {
+                const pts = [];
+                let c = fc, r = fr;
+                while (c !== tc || r !== tr) {
+                    c += Math.sign(tc - c);
+                    r += Math.sign(tr - r);
+                    pts.push({ col: c, row: r });
+                }
+                return pts;
+            };
+            const outbound = steppedPath(fromCol, fromRow, defCol, defRow);
+            const inbound = steppedPath(defCol, defRow, finalCol, finalRow);
+
+            return new Promise(resolve => {
+                let outIdx = 0;
+                const hopOut = () => {
+                    if (outIdx >= outbound.length) {
+                        // Contact: flash + chip the defender, dwell so the hit
+                        // reads, then bounce back.
+                        if (defEl) defEl.classList.add('combat-hit');
+                        if (defEl && oldDef && newDef) {
+                            const values = { strength: oldDef.strength, armor: oldDef.armor, spike: oldDef.spike, range: oldDef.range };
+                            const tick = () => {
+                                let pending = false;
+                                for (const k of Object.keys(values)) {
+                                    if (values[k] === newDef[k]) continue;
+                                    values[k] += Math.sign(newDef[k] - values[k]);
+                                    pending = true;
+                                }
+                                const s = defEl.querySelector('.str .snum') || defEl.querySelector('.str');
+                                const r = defEl.querySelector('.str .rng');
+                                const a = defEl.querySelector('.armor');
+                                const sp = defEl.querySelector('.spike');
+                                if (s) s.textContent = values.strength;
+                                if (r) r.textContent = values.range;
+                                if (a) a.textContent = `🛡️ ${values.armor}`;
+                                if (sp) sp.textContent = values.spike > 0 ? `⚡${values.spike}` : '';
+                                if (pending) setTimeout(tick, 180);
+                            };
+                            setTimeout(tick, 60);
+                        }
+                        setTimeout(hopBack, 420);
+                        return;
+                    }
+                    const point = outbound[outIdx++];
+                    placeAt(point.col, point.row);
+                    setTimeout(hopOut, 190);
+                };
+                let backIdx = 0;
+                const hopBack = () => {
+                    if (backIdx >= inbound.length) {
+                        clone.remove();
+                        finalEl.classList.remove('movement-arrival-hidden');
+                        resolve();
+                        return;
+                    }
+                    const point = inbound[backIdx++];
+                    placeAt(point.col, point.row);
+                    setTimeout(hopBack, 190);
+                };
+                requestAnimationFrame(() => requestAnimationFrame(hopOut));
+            });
+        }
+
+        // Keep the authoritative final piece rendered while briefly showing
+        // each combat stat changing one point at a time. This makes armor and
+        // strength damage readable instead of looking like a single blink.
+        // Bounce/chip squares are skipped here — the bounce sequence above
+        // owns their timing so the chip lands exactly on contact.
+        function animateStatChanges(previous, next) {
+            const lastEvent = next.gameHistory?.[next.gameHistory.length - 1]?.event || '';
+            const skip = new Set();
+            if (lastEvent.includes('repelled') || lastEvent.includes('bounced')) {
+                const atMatch = lastEvent.match(/at (\d+),(\d+)/);
+                const toMatch = lastEvent.match(/to (\d+),(\d+)/);
+                if (atMatch) skip.add(`${atMatch[1]},${atMatch[2]}`);
+                if (toMatch) skip.add(`${toMatch[1]},${toMatch[2]}`);
+            }
+            const jobs = [];
+            for (const row of ROWS) for (const col of COLUMNS) {
+                if (skip.has(`${col},${row}`)) continue;
+                const oldPiece = previous.board[`${col},${row}`]?.tenant;
+                const newPiece = next.board[`${col},${row}`]?.tenant;
+                if (!oldPiece || !newPiece || oldPiece.affiliation !== newPiece.affiliation) continue;
+                const changed = ['strength', 'armor', 'spike', 'range']
+                    .some(stat => oldPiece[stat] !== newPiece[stat]);
+                if (!changed) continue;
+
+                const cell = document.querySelector(`.cell[data-col="${col}"][data-row="${row}"]`);
+                const pieceEl = cell?.querySelector('.piece');
+                if (!pieceEl) continue;
+                pieceEl.classList.add('combat-hit');
+
+                const values = {
+                    strength: oldPiece.strength,
+                    armor: oldPiece.armor,
+                    spike: oldPiece.spike,
+                    range: oldPiece.range,
+                };
+                jobs.push(new Promise(resolve => {
+                    const step = () => {
+                        let pending = false;
+                        for (const stat of Object.keys(values)) {
+                            if (values[stat] === newPiece[stat]) continue;
+                            values[stat] += Math.sign(newPiece[stat] - values[stat]);
+                            pending = true;
+                        }
+                        const str = pieceEl.querySelector('.str .snum') || pieceEl.querySelector('.str');
+                        const rng = pieceEl.querySelector('.str .rng');
+                        const armor = pieceEl.querySelector('.armor');
+                        const spike = pieceEl.querySelector('.spike');
+                        if (str) str.textContent = values.strength;
+                        if (rng) rng.textContent = values.range;
+                        if (armor) armor.textContent = `🛡️${values.armor}`;
+                        if (spike) spike.textContent = values.spike > 0 ? `⚡${values.spike}` : '';
+                        if (pending) setTimeout(step, 180);
+                        else resolve();
+                    };
+                    // The first step is delayed so the hit and collision are
+                    // visible before the numbers begin ticking down.
+                    setTimeout(step, 220);
+                }));
+            }
+            return Promise.all(jobs);
+        }
+
+        // ============ Interaction Model ============
+        // Mirrors the server's mergeEffect() checks: range (Chebyshev distance),
+        // rook straight-line rule for strength 5-8, and a clear path between
+        // the two squares. Used to decide which ally pieces are merge targets.
+        function canMergeInto(selPiece, targetPos) {
+            const [sc, sr] = selPiece.position;
+            const [tc, tr] = targetPos;
+            const dx = tc - sc;
+            const dy = tr - sr;
+            const dist = Math.max(Math.abs(dx), Math.abs(dy));
+            if (dist === 0 || dist > selPiece.range) return false;
+            // Rooks (strength 5-8) move in straight lines only
+            if (selPiece.strength >= 5 && dx !== 0 && dy !== 0) return false;
+            // Pieces 1-4 may move straight OR on a true diagonal only — reject
+            // knight-like offsets such as (2,1), exactly as the server does.
+            if (selPiece.strength < 5 && dx !== 0 && dy !== 0 && Math.abs(dx) !== Math.abs(dy)) return false;
+            // Every square between must be clear (no brick, no piece)
+            const stepX = dx === 0 ? 0 : dx / Math.abs(dx);
+            const stepY = dy === 0 ? 0 : dy / Math.abs(dy);
+            for (let i = 1; i < dist; i++) {
+                const key = `${sc + stepX * i},${sr + stepY * i}`;
+                const sq = gameState.board[key];
+                if (!sq || sq.bricked || sq.occupied) return false;
+            }
+            return true;
+        }
+
+        // Like canSelectMoveTo, but for landing ON an enemy piece to capture it.
+        // The destination is occupied by the enemy, so we skip the "destination
+        // must be empty" check and just require the path up to (but not including)
+        // the enemy square to be clear.
+        function canCaptureOnto(piece, targetPos) {
+            const [sc, sr] = piece.position;
+            const [tc, tr] = targetPos;
+            const dx = tc - sc;
+            const dy = tr - sr;
+            const dist = Math.max(Math.abs(dx), Math.abs(dy));
+
+            if (dist === 0 || dist > piece.range) return false;
+            if (piece.strength >= 5 && dx !== 0 && dy !== 0) return false;
+            if (piece.strength < 5 && dx !== 0 && dy !== 0 && Math.abs(dx) !== Math.abs(dy)) return false;
+
+            const stepX = dx === 0 ? 0 : dx / Math.abs(dx);
+            const stepY = dy === 0 ? 0 : dy / Math.abs(dy);
+            for (let i = 1; i < dist; i++) {
+                const key = `${sc + stepX * i},${sr + stepY * i}`;
+                const sq = gameState.board[key];
+                if (!sq || sq.bricked || sq.occupied) return false;
+            }
+            return true;
+        }
+
+        // Mirrors the server's validateMove(): checks the selected piece can legally
+        // move to (targetCol, targetRow) — proper rook (strength >= 5, straight only)
+        // vs queen (strength <= 4, straight + diagonal) movement, within range, and
+        // a clear path. Returns true only for genuinely legal destinations.
+        function canSelectMoveTo(piece, targetPos) {
+            const [sc, sr] = piece.position;
+            const [tc, tr] = targetPos;
+            const dx = tc - sc;
+            const dy = tr - sr;
+            const dist = Math.max(Math.abs(dx), Math.abs(dy));
+
+            // Zero-length move (clicking the piece itself) is not a destination.
+            if (dist === 0 || dist > piece.range) return false;
+
+            // Rooks (strength 5-8) move in straight lines only.
+            if (piece.strength >= 5 && dx !== 0 && dy !== 0) return false;
+            // Pieces 1-4 may also move diagonally, but not with a knight-like
+            // offset such as two columns and one row.
+            if (piece.strength < 5 && dx !== 0 && dy !== 0 && Math.abs(dx) !== Math.abs(dy)) return false;
+
+            // Every square between must be clear (no brick, no piece).
+            const stepX = dx === 0 ? 0 : dx / Math.abs(dx);
+            const stepY = dy === 0 ? 0 : dy / Math.abs(dy);
+            for (let i = 1; i < dist; i++) {
+                const key = `${sc + stepX * i},${sr + stepY * i}`;
+                const sq = gameState.board[key];
+                if (!sq || sq.bricked || sq.occupied) return false;
+            }
+
+            // Destination must exist and not be bricked (the board grid only shows
+            // this branch for empty cells, so occupancy is already excluded).
+            const dest = gameState.board[`${tc},${tr}`];
+            if (!dest || dest.bricked) return false;
+
+            return true;
+        }
+
+        function handlePieceClick(col, row, piece) {
+            if (!gameState || gameState.gameOver) return;
+            hidePieceTooltip();
+
+            // Clicking the selected piece again deselects it and hides stats.
+            if (selection && selection.col === col && selection.row === row) {
+                selection = null;
+                armedEffect = null;
+                updateStatsCard();
+                renderGame(gameState);
+                return;
+            }
+
+            // If armed effect, clicking your own piece applies the effect.
+            // Split only arms your own pieces; Weaken/Strengthen arm any piece.
+            if (armedEffect) {
+                if (armedEffect === 'split' && piece.affiliation !== myAffiliation) {
+                    showToast('Split only works on your own piece');
+                    return;
+                }
+                socket.emit('useEffect', {
+                    roomId,
+                    effect: armedEffect,
+                    targetPosition: [col, row],
+                });
+                armedEffect = null;
+                return;
+            }
+
+            // MERGE: with another piece selected on a Merge turn, clicking a
+            // different ally piece is a merge intent — move onto the ally.
+            if (selection && gameState.turnEffect === 'Merge'
+                && piece.affiliation === myAffiliation
+                && selection.piece.affiliation === myAffiliation) {
+                socket.emit('move', {
+                    roomId,
+                    destination: [col, row],
+                    fromPosition: [selection.col, selection.row],
+                });
+                selection = null;
+                armedEffect = null;
+                return;
+            }
+
+            // Select this piece
+            selection = { col, row, piece };
+            updateStatsCard();
+            renderGame(gameState);
+        }
+
+        function handleDestinationClick(col, row) {
+            if (!gameState || gameState.gameOver) return;
+            hidePieceTooltip();
+
+            // Armed effect takes priority over a move — an armed Weaken or
+            // Strengthen can target an enemy (or ally) with no selection.
+            if (armedEffect) {
+                socket.emit('useEffect', {
+                    roomId,
+                    effect: armedEffect,
+                    targetPosition: [col, row],
+                });
+                armedEffect = null;
+                selection = null;
+                return;
+            }
+
+            if (!selection) return;
+
+            // Send move intent
+            socket.emit('move', {
+                roomId,
+                destination: [col, row],
+                fromPosition: [selection.col, selection.row],
+            });
+
+            selection = null;
+            armedEffect = null;
+        }
+
+        // ============ Effects ============
+        // The Active Ability pill IS the button — tap it to arm/disarm the
+        // turn's effect, then tap a piece on the board to apply it.
+        function toggleArmedFromChip() {
+            if (!gameState || gameState.gameOver) return;
+            if (myAffiliation !== gameState.turn) return;
+            if (gameState.turnEffect === 'Merge') return; // implicit, nothing to arm
+            armEffect(gameState.turnEffect.toLowerCase());
+        }
+
+        function armEffect(effect) {
+            if (armedEffect === effect) {
+                armedEffect = null;
+            } else {
+                armedEffect = effect;
+                // Deselect any selected piece — an effect is a separate action
+                // from a move, and armed effects target any valid piece.
+                selection = null;
+            }
+            updateEffectButtons();
+            renderGame(gameState);
+        }
+
+        function updateEffectButtons(state) {
+            const s = state || gameState;
+            const chip = document.getElementById('effect-chip');
+            const hint = document.getElementById('effect-arm-hint');
+            if (!s || !chip) return;
+            const usable = !s.gameOver && myAffiliation === s.turn && s.turnEffect !== 'Merge';
+            const key = (s.turnEffect || '').toLowerCase();
+            const isArmed = usable && armedEffect === key;
+            chip.classList.toggle('armed', isArmed);
+            chip.disabled = !usable;
+            if (hint) {
+                if (!usable) hint.textContent = '';
+                else if (isArmed) hint.textContent = '👆 Armed — tap a piece on the board';
+                else hint.textContent = '👆 Tap to arm, then tap a piece';
+            }
+        }
+
+        // ============ Stats Card ============
+        // Hidden when nothing is selected; appears/expands when a piece is clicked.
+        function updateStatsCard() {
+            const card = document.getElementById('selected-card');
+            const stats = document.getElementById('piece-stats');
+            if (!card || !stats) return;
+
+            if (!selection) {
+                card.style.display = 'none';
+                return;
+            }
+
+            card.style.display = 'block';
+            card.classList.remove('card-pop');
+            void card.offsetWidth; // restart the pop animation
+            card.classList.add('card-pop');
+
+            const p = selection.piece;
+            const spikeCapValue = spikeCap(p.strength);
+
+            stats.innerHTML = `
+                <div class="stat-row"><span class="label">⭐ Strength</span><span class="value">${p.strength}</span></div>
+                <div class="stat-row"><span class="label">🛡️ Armor</span><span class="value">${p.armor}</span></div>
+                <div class="stat-row"><span class="label">⚡ Spike</span><span class="value">${p.spike} (cap ${spikeCapValue})</span></div>
+                <div class="stat-row"><span class="label">📏 Range</span><span class="value">${p.range}</span></div>
+            `;
+        }
+
+        // ============ Effect chip + arrival toast ============
+        // Per-effect accent colors (used for the chip and the arrival toast).
+        const EFFECT_COLORS = {
+            Merge: { bg: '#DCFCE7', fg: '#15803D', toast: '🟢' },
+            Split: { bg: '#E0F2FE', fg: '#0369A1', toast: '🔵' },
+            Weaken: { bg: '#FEF3C7', fg: '#B45309', toast: '🟡' },
+            Strengthen: { bg: '#EDE9FE', fg: '#6D28D9', toast: '🟣' },
+        };
+
+        // Populate the side-panel chip and, when a NEW turn's effect arrives
+        // (turn advanced since last render), fire a toast + pop animation so
+        // the player is told exactly what tool is now available.
+        function renderEffectChip(state) {
+            const chip = document.getElementById('effect-chip');
+            const chipTip = document.getElementById('effect-chip-tip');
+            const box = document.getElementById('active-ability-box');
+            if (!chip) return;
+
+            const meta = EFFECT_META[state.turnEffect] || { icon: '✨', label: state.turnEffect, tip: '' };
+            const color = EFFECT_COLORS[state.turnEffect] || EFFECT_COLORS.Merge;
+            chip.textContent = `${meta.icon} ${meta.label}`;
+            chip.style.background = color.bg;
+            chip.style.color = color.fg;
+            if (chipTip) chipTip.textContent = meta.tip;
+            // Keep armed styling + hint in sync whenever the chip re-renders.
+            updateEffectButtons(state);
+
+            // Detect a fresh turn: turnCount advanced since the last render.
+            const newTurn = lastTurnCount !== null && state.turnCount !== lastTurnCount;
+            lastTurnCount = state.turnCount;
+
+            // Only announce the effect when it's MY turn — the opponent's
+            // effect is their business, not a tool I can use right now.
+            if (newTurn && !state.gameOver && state.turn === myAffiliation) {
+                // Pop the ability box + toast the effect so it can't be missed.
+                if (box) {
+                    box.classList.remove('effect-pop');
+                    void box.offsetWidth; // restart the animation
+                    box.classList.add('effect-pop');
+                    spawnSparkles(box, color.fg);
+                }
+                showToast(`${color.toast} ${meta.label} turn — ${meta.tip}`);
+            }
+        }
+
+        // Scatter a few twinkling sparkles across the ability box when my
+        // effect arrives — a little celebratory shimmer on top of the pop.
+        function spawnSparkles(box, color) {
+            const n = 7;
+            for (let i = 0; i < n; i++) {
+                const sp = document.createElement('span');
+                sp.className = 'sparkle';
+                sp.textContent = '✨';
+                sp.style.left = `${8 + Math.random() * 84}%`;
+                sp.style.top = `${10 + Math.random() * 70}%`;
+                sp.style.color = color;
+                sp.style.animationDelay = `${Math.random() * 0.35}s`;
+                sp.style.fontSize = `${0.55 + Math.random() * 0.6}rem`;
+                box.appendChild(sp);
+                // Remove after the animation completes so they don't pile up.
+                setTimeout(() => sp.remove(), 1600);
+            }
+        }
+
+        // Render the spike-cap legend (strength 1..8 → cap) so players learn
+        // which pieces can hoard spikes without being surprised by clamping.
+        function renderCapsLegend() {
+            const legend = document.getElementById('caps-legend');
+            if (!legend || legend.children.length) return; // build once
+            for (let s = 1; s <= 8; s++) {
+                const tile = document.createElement('div');
+                tile.className = 'cap-tile';
+                tile.title = `Strength ${s} holds max ${spikeCap(s)} spikes`;
+                tile.innerHTML = `<span class="cl">Str</span><span class="cs">${s}</span><span class="cc">${spikeCap(s)}⚡</span>`;
+                legend.appendChild(tile);
+            }
+        }
+
+        // ============ Turn Banner ============
+        function updateBanner(state) {
+            const banner = document.getElementById('turn-banner');
+            const turnText = document.getElementById('turn-text');
+
+            if (state.gameOver) {
+                const winnerName = state.gameWinner === 'blue' ? 'Blue' : 'Red';
+                turnText.textContent = `${winnerName} wins!`;
+                const winIcon = document.getElementById('turn-icon');
+                if (winIcon) {
+                    const isBlueWin = state.gameWinner === 'blue';
+                    winIcon.textContent = isBlueWin ? '🔵' : '🔴';
+                    winIcon.className = isBlueWin
+                        ? 'w-10 h-10 rounded-2xl bg-gradient-to-b from-candy-sky to-candy-deepSky flex items-center justify-center shadow-pop-blue text-white text-lg'
+                        : 'w-10 h-10 rounded-2xl bg-gradient-to-b from-candy-coral to-candy-deepPink flex items-center justify-center shadow-pop-pink text-white text-lg';
+                }
+                banner.className = 'turn-banner gameover';
+                showGameOverOverlay(state);
+                return;
+            }
+
+            const turnName = state.turn === 'blue' ? "Blue's turn" : "Red's turn";
+            turnText.textContent = turnName;
+            const turnIcon = document.getElementById('turn-icon');
+            if (turnIcon) {
+                const isBlue = state.turn === 'blue';
+                turnIcon.textContent = isBlue ? '🔵' : '🔴';
+                turnIcon.className = isBlue
+                    ? 'w-10 h-10 rounded-2xl bg-gradient-to-b from-candy-sky to-candy-deepSky flex items-center justify-center shadow-pop-blue text-white text-lg'
+                    : 'w-10 h-10 rounded-2xl bg-gradient-to-b from-candy-coral to-candy-deepPink flex items-center justify-center shadow-pop-pink text-white text-lg';
+            }
+            banner.className = `turn-banner ${state.turn}`;
+
+            // Hide any leftover result overlay (e.g. after a rematch).
+            document.getElementById('game-over-overlay').className = '';
+        }
+
+        // Full-screen dim overlay announcing the result. Win = big bold yellow
+        // letters with stars; Lose = big bold blue letters.
+        function showGameOverOverlay(state) {
+            const overlay = document.getElementById('game-over-overlay');
+            const title = document.getElementById('game-over-title');
+            const flair = document.getElementById('game-over-flair');
+            const subtitle = document.getElementById('game-over-subtitle');
+
+            const iWon = state.gameWinner === myAffiliation;
+            overlay.className = iWon ? 'win show' : 'lose show';
+
+            if (iWon) {
+                title.textContent = 'You Win!';
+                flair.textContent = '✨⭐🌟✨';
+                subtitle.textContent = `Victory — ${state.gameWinner === 'blue' ? '🔵 Blue' : '🔴 Red'} takes the board!`;
+            } else {
+                title.textContent = 'You Lose';
+                flair.textContent = '💧💙💧';
+                subtitle.textContent = `${state.gameWinner === 'blue' ? '🔵 Blue' : '🔴 Red'} wins this match.`;
+            }
+        }
+
+        // ============ Rematch / Home ============
+        // Rematch restarts a finished game with the same players/seats.
+        function requestRematch() {
+            if (!roomId) { showToast('No room to rematch'); return; }
+            if (gameState && !gameState.gameOver) { showToast('Game is still in progress'); return; }
+            if (socket && socket.connected) socket.emit('rematch', { roomId });
+            else if (socket) socket.once('connect', () => socket.emit('rematch', { roomId }));
+            showToast('Starting rematch...');
+        }
+        // Home returns to the landing page (keeps the socket for a fast rematch later).
+        function goHome() {
+            document.getElementById('game-over-overlay').className = '';
+            try { window.history.pushState({}, '', '/'); } catch (e) { /* ignore */ }
+            roomId = null;
+            gameState = null;
+            selection = null;
+            armedEffect = null;
+            lastTurnEffect = null;
+            lastTurnCount = null;
+            // Reset header/panel chrome so the next game starts clean.
+            document.getElementById('room-id-display').textContent = '—';
+            document.getElementById('mode-badge').textContent = 'lobby';
+            document.getElementById('copy-link').style.display = 'none';
+            setOpponentStatus('Waiting for opponent...', 'waiting');
+            document.getElementById('history-feed').innerHTML = '';
+            document.getElementById('history-count').textContent = '0';
+            showLanding(true);
+        }
+        // Quit mid-game: tell the server we're leaving (so the opponent is
+        // notified immediately) then return to the landing page.
+        function quitGame() {
+            // Confirm only while a game is actually in progress — no need to
+            // nag on a finished board or while still waiting in lobby.
+            if (gameState && !gameState.gameOver) {
+                if (!window.confirm('Quit this game and return home?')) return;
+            }
+            if (roomId && socket && socket.connected) {
+                try { socket.emit('leaveRoom', { roomId }); } catch (e) { /* ignore */ }
+            }
+            goHome();
+        }
+
+        // ============ History Feed ============
+        // Backend keeps the FULL log (no trimming). Side panel shows the
+        // last 15; the explorer modal shows everything with filters.
+        let historyFilter = 'all'; // 'all' | 'blue' | 'red'
+        let historySearch = '';
+        function updateHistory(state) {
+            const feed = document.getElementById('history-feed');
+            feed.innerHTML = '';
+            if (!state.gameHistory) return;
+            const total = state.gameHistory.length;
+            const countEl = document.getElementById('history-count');
+            if (countEl) countEl.textContent = `${total}`;
+            // Show last 15 entries, newest first. Backend events keep raw
+            // "col,row" coords (authoritative); we render display labels + a
+            // descriptive battle-report phrasing here only.
+            const entries = state.gameHistory.slice(-15).reverse();
+            for (const entry of entries) {
+                const div = document.createElement('div');
+                div.className = `entry ${entry.player || ''}`;
+                div.innerHTML = `<span class="turn-num">T${entry.turn}</span><span>${formatHistoryEvent(entry.event)}</span>`;
+                feed.appendChild(div);
+            }
+            // Keep the explorer in sync if it is open.
+            const modal = document.getElementById('history-modal');
+            if (modal && !modal.classList.contains('hidden')) renderFullHistory();
+        }
+        function openHistory() {
+            const m = document.getElementById('history-modal');
+            m.classList.remove('hidden');
+            m.classList.add('flex');
+            renderFullHistory();
+        }
+        function closeHistory() {
+            const m = document.getElementById('history-modal');
+            if (!m) return;
+            m.classList.add('hidden');
+            m.classList.remove('flex');
+        }
+        function setHistoryFilter(f) {
+            historyFilter = f;
+            document.querySelectorAll('.history-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === f));
+            renderFullHistory();
+        }
+        function setHistorySearch(v) {
+            historySearch = (v || '').toLowerCase();
+            renderFullHistory();
+        }
+        function renderFullHistory() {
+            const list = document.getElementById('history-full-list');
+            if (!list || !gameState?.gameHistory) return;
+            list.innerHTML = '';
+            const total = gameState.gameHistory.length;
+            const titleCount = document.getElementById('history-modal-count');
+            if (titleCount) titleCount.textContent = `${total} move${total === 1 ? '' : 's'}`;
+            // Newest first so the latest action is on top; every entry keeps
+            // its turn number so chronological order is still visible.
+            const entries = gameState.gameHistory.slice().reverse();
+            let shown = 0;
+            for (const entry of entries) {
+                if (historyFilter !== 'all' && entry.player !== historyFilter) continue;
+                const text = formatHistoryEvent(entry.event);
+                if (historySearch && !(`t${entry.turn} ${entry.player || ''} ${text}`.toLowerCase().includes(historySearch))) continue;
+                const div = document.createElement('div');
+                div.className = `entry ${entry.player || ''}`;
+                div.innerHTML = `<span class="turn-num">T${entry.turn}</span><span>${text}</span>`;
+                list.appendChild(div);
+                shown++;
+            }
+            if (shown === 0) {
+                list.innerHTML = '<div class="text-center text-xs font-bold text-slate-400 py-6">No moves match this filter.</div>';
+            }
+        }
+
+        // ============ Initial ============
+        console.log('Number Wars client loaded');
+    </script>
+</body>
+</html>
