@@ -1,5 +1,5 @@
 import { gameState } from "./start";
-import { neutralZone, starPrioritySquares, starRow } from "./board";
+import { neutralZone } from "./board";
 
 
 
@@ -178,37 +178,57 @@ export function spawnShards(game: gameState): string {
 // ===== star system — an alternate win condition =====
 
 const STAR_SPAWN_INTERVAL = 10;   // spawn a new star every 10 turns
+const STAR_SPAWN_ROWS: ReadonlyArray<{ row: number; weight: number }> = [
+    { row: 6, weight: 30 },
+    { row: 7, weight: 40 },
+    { row: 8, weight: 30 },
+];
 
-// Squares eligible for a star, in priority order:
-//   1. the four hot-zone squares (28,6 / 29,6 / 28,8 / 29,8) + the whole 7th row
-//   2. the rest of the neutral zone (rows 4-10) as fallback
+// Squares eligible for a star. Stars can spawn anywhere across the full
+// sixth, seventh, or eighth row. The row itself is selected separately using
+// the 30% / 40% / 30% weights above.
 // A square is only eligible if nothing is on it: no piece, no brick,
 // no shard, no star already.
 export function starCandidates(game: gameState): string[] {
     const board = game.board;
 
-    const isEmpty = (key: string, square: any): boolean =>
+    const isEmpty = (square: any): boolean =>
         !square.occupied && square.tenant === null && !square.bricked &&
         square.shard === undefined && square.star !== true;
 
-    const byPriority = (key: string): number => {
-        const [, r] = key.split(",").map(Number);
-        // Hot-zone squares and the 7th row share top priority.
-        if (starPrioritySquares.includes(key) || r === starRow) return 0;
-        if (neutralZone.includes(r)) return 1;
-        return 2;
-    };
-
-    const candidates = Object.entries(board)
-        .filter(([key, square]) => isEmpty(key, square) && byPriority(key) <= 1)
-        .sort((a, b) => byPriority(a[0]) - byPriority(b[0]));
-
-    // Only place on the best available priority tier.
-    if (candidates.length === 0) return [];
-    const bestTier = byPriority(candidates[0]![0]);
-    return candidates
-        .filter(([key]) => byPriority(key) === bestTier)
+    return Object.entries(board)
+        .filter(([key, square]) => {
+            const row = Number(key.split(",")[1]);
+            return STAR_SPAWN_ROWS.some(({ row: spawnRow }) => spawnRow === row) && isEmpty(square);
+        })
         .map(([key]) => key);
+}
+
+function chooseStarCandidate(candidates: string[]): string {
+    const byRow = new Map<number, string[]>();
+    for (const key of candidates) {
+        const row = Number(key.split(",")[1]);
+        const rowCandidates = byRow.get(row) ?? [];
+        rowCandidates.push(key);
+        byRow.set(row, rowCandidates);
+    }
+
+    // If a weighted row is unavailable, redistribute its weight across the
+    // rows that still contain valid squares rather than failing the spawn.
+    const availableRows = STAR_SPAWN_ROWS.filter(({ row }) => byRow.has(row));
+    const totalWeight = availableRows.reduce((total, { weight }) => total + weight, 0);
+    let randomWeight = Math.random() * totalWeight;
+    let selectedRow = availableRows[availableRows.length - 1]!.row;
+    for (const { row, weight } of availableRows) {
+        if (randomWeight < weight) {
+            selectedRow = row;
+            break;
+        }
+        randomWeight -= weight;
+    }
+
+    const rowCandidates = byRow.get(selectedRow)!;
+    return rowCandidates[Math.floor(Math.random() * rowCandidates.length)]!;
 }
 
 // Spawn a single star, if scheduled and none is already on the board.
@@ -231,7 +251,7 @@ export function spawnStar(game: gameState): string | null {
         return null;
     }
 
-    const key = candidates[Math.floor(Math.random() * candidates.length)]!;
+    const key = chooseStarCandidate(candidates);
     game.board[key]!.star = true;
     game.starTurn = game.turnCount + STAR_SPAWN_INTERVAL;
     return `Star spawned at ${key}`;
