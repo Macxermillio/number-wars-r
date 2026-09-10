@@ -513,7 +513,7 @@ export function applyAction(state: gameState, action: AiAction): { error?: strin
             return sq && !sq.bricked && !sq.occupied && sq.shard === undefined;
         });
         if (!pos) return { error: "No valid split square" };
-        const half = { strength: target.strength / 2, armor: Math.floor(target.armor / 2), spike: Math.floor(target.spike / 2), range: target.range / 2 };
+        const half = { strength: target.strength / 2, armor: Math.floor(target.armor / 2), spike: Math.floor(target.spike / 2), range: Math.floor(target.range / 2) };
         target.strength = half.strength; target.armor = half.armor; target.spike = half.spike; target.range = half.range;
         const copy = { ...target, position: pos as [number, number] };
         state.board[`${pos[0]},${pos[1]}`]!.tenant = copy;

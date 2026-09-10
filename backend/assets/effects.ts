@@ -174,28 +174,28 @@ export function splitEffect(piece: Piece, board: Board, game: gameState){
         case 2:
             piece.strength =  1
             piece.armor = Math.floor(piece.armor / 2)
-            piece.range = piece.range / 2
+            piece.range = Math.floor(piece.range / 2)
             piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
             if (createPiece(piece, game) === "Piece created") return "Piece created"
             break;
         case 4:
             piece.strength =  2
             piece.armor = Math.floor(piece.armor / 2)
-            piece.range = piece.range / 2
+            piece.range = Math.floor(piece.range / 2)
             piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
             if (createPiece(piece, game) === "Piece created") return "Piece created"
             break;
         case 6:
             piece.strength =  3
             piece.armor = Math.floor(piece.armor / 2)
-            piece.range = piece.range / 2
+            piece.range = Math.floor(piece.range / 2)
             piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
             if (createPiece(piece, game) === "Piece created") return "Piece created"
             break;
         case 8:
             piece.strength =  4
             piece.armor = Math.floor(piece.armor / 2)
-            piece.range = piece.range / 2
+            piece.range = Math.floor(piece.range / 2)
             piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
                 if (createPiece(piece, game) === "Piece created") return "Piece created"
             break;

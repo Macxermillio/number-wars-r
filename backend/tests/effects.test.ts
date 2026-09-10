@@ -31,6 +31,21 @@ describe("splitEffect()", () => {
         expect(game.bluePieces.length).toBeGreaterThan(0);
     });
 
+    it("rounds a split range down and never creates a decimal range", () => {
+        const board = createGridBoard(4, 4);
+        const game = makeGame({ board });
+        const piece = makePiece({ position: [1, 1], strength: 2, armor: 4, range: 3 });
+        placePiece(board, piece);
+
+        splitEffect(piece, board, game);
+
+        expect(piece.range).toBe(1);
+        expect(Number.isInteger(piece.range)).toBe(true);
+        const created = game.bluePieces.find((candidate) => candidate !== piece);
+        expect(created?.range).toBe(1);
+        expect(Number.isInteger(created?.range)).toBe(true);
+    });
+
     it("splits a strength-4 piece into strength 2", () => {
         const board = createGridBoard(4, 4);
         const game = makeGame({ board });
