@@ -264,7 +264,7 @@ export function strengthenPiece(piece: Piece, game: gameState){
         strength: strengthIncrease,
         armor: reducedArmor,
         spike: piece.spike,
-        range: Math.max(1, piece.range),
+        range: Math.min(8, Math.max(1, piece.range * 2)),
         position: piece.position,
         affiliation: piece.affiliation
     }

@@ -528,6 +528,7 @@ export function applyAction(state: gameState, action: AiAction): { error?: strin
         const gained = Math.min(8, target.strength * 2) - target.strength;
         target.strength += gained;
         target.armor = Math.max(0, target.armor - gained);
+        target.range = Math.min(8, Math.max(1, target.range * 2));
         target.spike = Math.min(target.spike, maxSpikesForStrength(target.strength));
     }
     advanceSearchTurn(state);
