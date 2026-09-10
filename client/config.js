@@ -15,7 +15,6 @@
 // (VITE_BACKEND_URL / NEXT_PUBLIC_BACKEND_URL) if you add a build step.
 // ============================================================
 window.NW_CONFIG = {
-    // TODO: set this to your Railway backend URL once the service exists,
-    // e.g. "https://number-wars-production.up.railway.app"
-    BACKEND_URL: ""
+    // Railway backend (production). The Vercel frontend connects here.
+    BACKEND_URL: "https://number-wars-r-production.up.railway.app"
 };
