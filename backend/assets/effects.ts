@@ -41,7 +41,7 @@ function createPiece(piece: Piece, game: gameState){
             strength: piece.strength,
             armor: piece.armor,
             spike: 0,
-            range: piece.range,
+            range: Math.max(1, piece.range),
             position: [pos[0], pos[1]],
             affiliation: piece.affiliation,
         }
@@ -126,7 +126,7 @@ export function mergeEffect(piece: Piece, target: Piece, board: Board, game: gam
         strength: Math.min(piece.strength + target.strength, 8),
         armor: Math.min(piece.armor + target.armor, 10),
         spike: 0,
-        range: Math.max(piece.range, target.range),
+        range: Math.max(1, piece.range, target.range),
         position: [target.position[0], target.position[1]],
         affiliation: piece.affiliation,
     }
@@ -170,32 +170,36 @@ export function splitEffect(piece: Piece, board: Board, game: gameState){
         return "Can't split piece, that is not yours"
     }
 
+    // Splitting halves the range, but a piece must always retain at least
+    // one square of movement.
+    const splitRange = Math.max(1, Math.floor(piece.range / 2))
+
     switch(piece.strength) {
         case 2:
             piece.strength =  1
             piece.armor = Math.floor(piece.armor / 2)
-            piece.range = Math.floor(piece.range / 2)
+            piece.range = splitRange
             piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
             if (createPiece(piece, game) === "Piece created") return "Piece created"
             break;
         case 4:
             piece.strength =  2
             piece.armor = Math.floor(piece.armor / 2)
-            piece.range = Math.floor(piece.range / 2)
+            piece.range = splitRange
             piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
             if (createPiece(piece, game) === "Piece created") return "Piece created"
             break;
         case 6:
             piece.strength =  3
             piece.armor = Math.floor(piece.armor / 2)
-            piece.range = Math.floor(piece.range / 2)
+            piece.range = splitRange
             piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
             if (createPiece(piece, game) === "Piece created") return "Piece created"
             break;
         case 8:
             piece.strength =  4
             piece.armor = Math.floor(piece.armor / 2)
-            piece.range = Math.floor(piece.range / 2)
+            piece.range = splitRange
             piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
                 if (createPiece(piece, game) === "Piece created") return "Piece created"
             break;
@@ -213,7 +217,7 @@ export function weakenEffect(piece: Piece, game: gameState){
 
     const reducedStrengh = piece.strength > 1 ? piece.strength - 1 : piece.strength;
     const reducedArmor = piece.armor > 1 ? piece.armor - 1 : piece.armor;
-    const reducedRange = piece.range > 1 ? piece.range - 1 : piece.range;
+    const reducedRange = Math.max(1, piece.range - 1);
 
     const reducedPiece: Piece = {
         strength: reducedStrengh,
@@ -260,7 +264,7 @@ export function strengthenPiece(piece: Piece, game: gameState){
         strength: strengthIncrease,
         armor: reducedArmor,
         spike: piece.spike,
-        range: piece.range,
+        range: Math.max(1, piece.range),
         position: piece.position,
         affiliation: piece.affiliation
     }

@@ -231,7 +231,7 @@ function simulateMerge(state: gameState, piece: Piece, target: Piece): string {
         strength: Math.min(piece.strength + target.strength, 8),
         armor: Math.min(piece.armor + target.armor, 10),
         spike: Math.min(piece.spike + target.spike, maxSpikesForStrength(Math.min(piece.strength + target.strength, 8))),
-        range: Math.max(piece.range, target.range),
+        range: Math.max(1, piece.range, target.range),
         position: [target.position[0], target.position[1]],
         affiliation: piece.affiliation,
     };
@@ -513,7 +513,7 @@ export function applyAction(state: gameState, action: AiAction): { error?: strin
             return sq && !sq.bricked && !sq.occupied && sq.shard === undefined;
         });
         if (!pos) return { error: "No valid split square" };
-        const half = { strength: target.strength / 2, armor: Math.floor(target.armor / 2), spike: Math.floor(target.spike / 2), range: Math.floor(target.range / 2) };
+        const half = { strength: target.strength / 2, armor: Math.floor(target.armor / 2), spike: Math.floor(target.spike / 2), range: Math.max(1, Math.floor(target.range / 2)) };
         target.strength = half.strength; target.armor = half.armor; target.spike = half.spike; target.range = half.range;
         const copy = { ...target, position: pos as [number, number] };
         state.board[`${pos[0]},${pos[1]}`]!.tenant = copy;
