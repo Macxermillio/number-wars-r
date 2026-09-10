@@ -231,7 +231,7 @@
             75% { filter: brightness(2); transform: translateX(-2px); }
         }
 
-        /* Turn status / thinking / banners — class names kept, arcade skin */
+        /* Turn status / banners — class names kept, arcade skin */
         .turn-status {
             display: none;
             margin-bottom: 8px;
@@ -244,8 +244,6 @@
         }
         .turn-status.your-turn { display: block; color: #fff; background: linear-gradient(to right, #34D399, #1DD1A1); border: 2px solid #6EE7B7; box-shadow: 0 4px 0 0 #109E79; }
         .turn-status.opponent-turn { display: block; color: #64748B; background: #F1F5F9; border: 2px solid #E2E8F0; }
-        .thinking-indicator { display: none; text-align: center; padding: 8px; color: #94A3B8; font-size: 0.85rem; font-family: Fredoka, sans-serif; }
-        .thinking-indicator.active { display: block; }
 
         .turn-banner { padding: 12px; border-radius: 1rem; text-align: center; font-weight: 600; font-size: 1rem; font-family: Fredoka, sans-serif; }
         .turn-banner.blue { background: linear-gradient(to bottom right, #fff, #EFF6FF); color: #1A9BE6; border: 2px solid #BFDBFE; }
@@ -471,7 +469,7 @@
         #match-stats .ms { flex: 1; background: #F8FAFC; border: 1px solid #F1F5F9; border-radius: 0.75rem; padding: 6px 4px; text-align: center; font-family: Fredoka, sans-serif; }
         #match-stats .ms .v { font-weight: 700; color: #0F172A; font-size: 0.9rem; line-height: 1.1; }
         #match-stats .ms .k { font-size: 0.62rem; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.5px; }
-        body.game-active .thinking-indicator { padding: 0 !important; font-size: 0.75rem !important; min-height: 0; }
+
         /* Main row: board stretches, panel comfortably wide for reading */
         body.game-active #game-area {
             display: flex !important; flex-direction: row !important;
@@ -771,7 +769,7 @@
             </div>
         </header>
 
-        <!-- MainContentArea (turn banner + thinking live in the side panel) -->
+        <!-- MainContentArea (turn badge lives in the side panel) -->
         <div id="game-area" class="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start flex-grow">
             <!-- Board -->
             <section aria-label="Battlefield Grid" class="lg:col-span-8 xl:col-span-9 bg-white p-3 sm:p-5 rounded-3xl shadow-pop border-2 border-purple-100 flex flex-col" id="board-area">
@@ -795,7 +793,6 @@
                         </div>
                     </div>
                     <div><span id="turn-badge" class="theirs">Waiting...</span></div>
-                    <div class="thinking-indicator" id="thinking-indicator">🤔 Opponent is thinking...</div>
                     <div class="bg-white/80 rounded-2xl p-4 border border-blue-100 mt-2" id="active-ability-box">
                         <div class="text-xs font-fredoka font-semibold text-candy-purple mb-1 flex items-center gap-1.5 ability-label"><span>✨</span> Active Ability</div>
                         <button class="effect-chip" id="effect-chip" type="button" onclick="toggleArmedFromChip()" title="Tap to arm this ability, then tap a piece" style="background:#EDE9FE;color:#7D5FFF;">—</button>
@@ -950,6 +947,7 @@
                 saveSeat(roomId, myPlayerId, myAffiliation);
                 document.getElementById('room-id-display').textContent = `${roomId}`;
                 document.getElementById('mode-badge').textContent = gameMode;
+                announceSide();
 
                 if (gameMode === 'friend') {
                     document.getElementById('copy-link').style.display = 'inline-block';
@@ -979,6 +977,7 @@
                 saveSeat(roomId, myPlayerId, myAffiliation);
                 document.getElementById('room-id-display').textContent = `${roomId}`;
                 document.getElementById('mode-badge').textContent = gameMode;
+                announceSide();
                 setOpponentStatus('Connected', 'connected');
                 document.getElementById('copy-link').style.display = 'none';
 
@@ -1073,6 +1072,14 @@
             else if (kind === 'connected') icon.textContent = '✅';
             else if (kind === 'disconnected') icon.textContent = '⚠';
             else icon.textContent = '⏳';
+        }
+
+        // Tell the player which side they are on when they enter a game.
+        // Single place so create + join + rejoin all announce consistently.
+        function announceSide() {
+            if (!myAffiliation) return;
+            const label = myAffiliation === 'blue' ? '🔵 You are Blue side!' : '🔴 You are Red side!';
+            showToast(label);
         }
 
         // ============ Create / Join Room ============
@@ -1295,8 +1302,7 @@
                 }
             }
 
-            const thinkingEl = document.getElementById('thinking-indicator');
-            thinkingEl.classList.toggle('active', state.turn !== myAffiliation && !state.gameOver);
+
 
             for (const row of ROWS) {
                 for (const col of COLUMNS) {
