@@ -73,3 +73,11 @@ export function placePiece(board: Board, piece: Piece): void {
         tenant: piece,
     };
 }
+
+export function createGameBoard(): Board {
+    const board: Board = {};
+    for (let c = 21; c <= 36; c++) {
+        for (let r = 1; r <= 13; r++) board[`${c},${r}`] = makeSquare();
+    }
+    return board;
+}

@@ -58,6 +58,30 @@ function moveWinsImmediately(state: gameState, mv: AiAction, affiliation: "red" 
     return score !== null && score > 0;
 }
 
+function captureCount(state: gameState, affiliation: "red" | "blue"): number {
+    return legalActions(state, affiliation).filter((action) => action.type === "move" &&
+        !!state.board[`${action.to[0]},${action.to[1]}`]?.tenant &&
+        state.board[`${action.to[0]},${action.to[1]}`]?.tenant?.affiliation !== affiliation).length;
+}
+
+export function isMeaningfulSplit(state: gameState, action: AiAction, affiliation: "red" | "blue"): boolean {
+    if (action.type !== "split") return true;
+    const beforeMobility = legalMovesForEvaluation(state, affiliation);
+    const beforeCaptures = captureCount(state, affiliation);
+    const sim = cloneState(state);
+    if (applyAction(sim, action).error) return false;
+    const mobilityDelta = legalMovesForEvaluation(sim, affiliation) - beforeMobility;
+    const captureDelta = captureCount(sim, affiliation) - beforeCaptures;
+    // Splitting normally reduces total armor and can reduce range, so a small
+    // mobility increase is not enough to justify it. Require a concrete new
+    // capture or a substantial mobility gain.
+    return captureDelta > 0 || mobilityDelta >= 6;
+}
+
+function legalMovesForEvaluation(state: gameState, affiliation: "red" | "blue"): number {
+    return legalActions(state, affiliation).filter((action) => action.type === "move").length;
+}
+
 // Order moves so likely-good ones (captures, star pickups, star-zone
 // positioning, shard pickups, merges) come first — this makes alpha-beta
 // prune much more effectively. Insane mode massively up-weights a star
@@ -74,7 +98,7 @@ function orderMoves(state: gameState, moves: AiAction[], affiliation: "red" | "b
     const ranked = moves.map((mv) => {
         let score = 0;
         if (mv.type !== "move") {
-            score += mv.type === "strengthen" ? 90 : mv.type === "weaken" ? 80 : 60;
+            score += mv.type === "strengthen" ? 90 : mv.type === "weaken" ? 80 : -100;
             return { mv, score };
         }
         const to = state.board[`${mv.to[0]},${mv.to[1]}`];
@@ -125,6 +149,8 @@ export function pickMinimaxMove(state: gameState, affiliation: "red" | "blue", d
         // the root to the most promising ordered moves is safe: captures,
         // winning/denying stars and star-zone moves are all ranked first.
         if (moves.length > 24) moves.splice(24);
+        moves = moves.filter((mv) => mv.type !== "split" || isMeaningfulSplit(state, mv, affiliation));
+        if (moves.length === 0) return null;
     }
 
     let bestMove: AiAction | null = null;
@@ -182,6 +208,9 @@ function minimax(
     // everything so no winning move is blind-spotted.
     if (difficulty === "insane" && moves.length > 28) {
         moves = moves.slice(0, 28);
+    }
+    if (difficulty === "insane") {
+        moves = moves.filter((mv) => mv.type !== "split" || isMeaningfulSplit(state, mv, turnAffiliation));
     }
 
     let best = isMax ? -Infinity : Infinity;
