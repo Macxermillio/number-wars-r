@@ -229,6 +229,22 @@ function attachSocketToSlot(room: Room, slot: PlayerSlot, socket: any) {
     cancelDisconnectNotice(room.roomId, slot.playerId);
 }
 
+// A move can arrive during the small window between Socket.IO reconnecting
+// and the client's automatic joinRoom acknowledgement. Since the playerId is
+// durable, repair the socket membership at the intent boundary instead of
+// rejecting a valid player with "You are not in this room".
+function reattachSocketIfKnown(room: Room, playerId: string, socket: any): PlayerSlot | null {
+    const slot = room.players.find(p => p.playerId === playerId);
+    if (!slot || isBotSlot(slot)) return null;
+    if (slot.socketId !== socket.id || !slot.connected) {
+        attachSocketToSlot(room, slot, socket);
+        persist(room);
+    } else if (!socket.rooms.has(room.roomId)) {
+        socket.join(room.roomId);
+    }
+    return slot;
+}
+
 // Return the AI/computer player slot, creating it on demand if missing.
 // The AI is red and has no socket, so it can never conflict with a human.
 function getAiPlayer(room: Room): PlayerSlot {
@@ -827,7 +843,7 @@ io.on("connection", (socket) => {
     });
 
     // --- Move ---
-    socket.on("move", async ({ roomId, destination, fromPosition }: { roomId: string; destination: [number, number]; fromPosition?: [number, number] }) => {
+    socket.on("move", async ({ roomId, playerId: claimedPlayerId, destination, fromPosition }: { roomId: string; playerId?: string; destination: [number, number]; fromPosition?: [number, number] }) => {
         try {
             const room = await fetchRoom(roomId);
             if (!room) {
@@ -841,8 +857,8 @@ io.on("connection", (socket) => {
                 return;
             }
 
-            const playerId = socket.data.playerId || getPlayerId(socket);
-            const slot = room.players.find(p => p.playerId === playerId);
+            const playerId = socket.data.playerId || getPlayerId(socket) || claimedPlayerId || "";
+            const slot = reattachSocketIfKnown(room, playerId, socket);
             if (!slot) {
                 socket.emit("error", "You are not in this room");
                 return;
@@ -911,7 +927,7 @@ io.on("connection", (socket) => {
     });
 
     // --- Use Effect ---
-    socket.on("useEffect", async ({ roomId, effect, targetPosition }: { roomId: string; effect: string; targetPosition: [number, number] }) => {
+    socket.on("useEffect", async ({ roomId, playerId: claimedPlayerId, effect, targetPosition }: { roomId: string; playerId?: string; effect: string; targetPosition: [number, number] }) => {
         try {
             const room = await fetchRoom(roomId);
             if (!room) {
@@ -925,8 +941,8 @@ io.on("connection", (socket) => {
                 return;
             }
 
-            const playerId = socket.data.playerId || getPlayerId(socket);
-            const slot = room.players.find(p => p.playerId === playerId);
+            const playerId = socket.data.playerId || getPlayerId(socket) || claimedPlayerId || "";
+            const slot = reattachSocketIfKnown(room, playerId, socket);
             if (!slot) {
                 socket.emit("error", "You are not in this room");
                 return;

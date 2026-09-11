@@ -947,6 +947,7 @@
         // quit and re-enter the room code by hand.
         let pendingJoin = null; // { roomId, playerId }
         let rejoinTimer = null;
+        let joinedRoomId = null;
         function buildJoinPayload(code) {
             const seat = loadSeat(code);
             const payload = { roomId: code };
@@ -968,8 +969,10 @@
             let attempts = 0;
             const tick = () => {
                 if (!pendingJoin || !pendingJoin.roomId) return;
-                // Stop once the server has accepted us (roomJoined/gameState).
-                if (gameState && roomId === pendingJoin.roomId) return;
+                // Stop only after the server has explicitly accepted this
+                // socket. A gameState can be left over from before a deploy,
+                // so it is not proof that this socket is in the room.
+                if (joinedRoomId === pendingJoin.roomId) return;
                 if (attempts >= 6) {
                     showToast('Still reconnecting… re-enter room code if this persists');
                     return;
@@ -998,7 +1001,8 @@
                 console.log('[WS] Connected:', socket.id);
                 // Backend restarted mid-game: the new process knows the room
                 // (Redis) but not our socket — rejoin automatically.
-                if (pendingJoin && pendingJoin.roomId && !gameState) {
+                joinedRoomId = null;
+                if (pendingJoin && pendingJoin.roomId) {
                     emitJoin(pendingJoin.roomId);
                     scheduleRejoin();
                 }
@@ -1006,6 +1010,7 @@
 
             socket.on('roomCreated', (data) => {
                 roomId = data.roomId;
+                joinedRoomId = roomId;
                 pendingJoin = { roomId, playerId: data.playerId || myPlayerId };
                 if (rejoinTimer) { clearTimeout(rejoinTimer); rejoinTimer = null; }
                 gameMode = data.mode || 'friend';
@@ -1038,6 +1043,7 @@
 
             socket.on('roomJoined', (data) => {
                 roomId = data.roomId;
+                joinedRoomId = roomId;
                 pendingJoin = { roomId, playerId: data.playerId || myPlayerId };
                 if (rejoinTimer) { clearTimeout(rejoinTimer); rejoinTimer = null; }
                 gameMode = data.mode;
@@ -1131,12 +1137,15 @@
                 // join instead of leaving the player stuck with
                 // "You are not in this room".
                 if (typeof msg === 'string' && /not in this room|room not found/i.test(msg) && pendingJoin && pendingJoin.roomId) {
+                    joinedRoomId = null;
+                    emitJoin(pendingJoin.roomId);
                     scheduleRejoin();
                 }
             });
 
             socket.on('disconnect', (reason) => {
                 showToast('Disconnected from server — reconnecting…');
+                joinedRoomId = null;
                 // Socket.IO auto-reconnects; on 'connect' we re-emit joinRoom.
                 // Keep pendingJoin so the rejoin path above fires.
                 console.log('[WS] disconnect:', reason);
@@ -2008,6 +2017,7 @@
                 }
                 socket.emit('useEffect', {
                     roomId,
+                    playerId: myPlayerId,
                     effect: armedEffect,
                     targetPosition: [col, row],
                 });
@@ -2022,6 +2032,7 @@
                 && selection.piece.affiliation === myAffiliation) {
                 socket.emit('move', {
                     roomId,
+                    playerId: myPlayerId,
                     destination: [col, row],
                     fromPosition: [selection.col, selection.row],
                 });
@@ -2045,6 +2056,7 @@
             if (armedEffect) {
                 socket.emit('useEffect', {
                     roomId,
+                    playerId: myPlayerId,
                     effect: armedEffect,
                     targetPosition: [col, row],
                 });
@@ -2058,6 +2070,7 @@
             // Send move intent
             socket.emit('move', {
                 roomId,
+                playerId: myPlayerId,
                 destination: [col, row],
                 fromPosition: [selection.col, selection.row],
             });
