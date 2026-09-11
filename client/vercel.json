@@ -1,5 +1,6 @@
 {
   "rewrites": [
-    { "source": "/play/:roomId", "destination": "/index.html" }
+    { "source": "/play/:roomId", "destination": "/index.html" },
+    { "source": "/:roomId([a-zA-Z0-9]{4,32})", "destination": "/index.html" }
   ]
 }

@@ -43,10 +43,16 @@ export function getRedis(): Redis | null {
 
 export async function saveRoom(room: Room): Promise<void> {
     if (!redis) return;
+    await saveRoomJson(room.roomId, JSON.stringify(room));
+}
+
+/** Save an already-created snapshot. The caller can serialize before queueing. */
+export async function saveRoomJson(roomId: string, serializedRoom: string): Promise<void> {
+    if (!redis) return;
     try {
-        await redis.setex(roomKey(room.roomId), ROOM_TTL_SECONDS, JSON.stringify(room));
+        await redis.setex(roomKey(roomId), ROOM_TTL_SECONDS, serializedRoom);
     } catch (err: any) {
-        console.error(`[redis] saveRoom ${room.roomId} failed:`, err.message);
+        console.error(`[redis] saveRoom ${roomId} failed:`, err.message);
     }
 }
 

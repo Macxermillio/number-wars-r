@@ -961,6 +961,10 @@
             if (socket.connected) socket.emit('joinRoom', payload);
             else socket.once('connect', () => socket.emit('joinRoom', payload));
         }
+        function setRoomUrl(code) {
+            if (!code) return;
+            try { window.history.replaceState({}, '', `/${code}`); } catch (e) { /* ignore */ }
+        }
         function scheduleRejoin() {
             if (rejoinTimer) clearTimeout(rejoinTimer);
             if (!pendingJoin || !pendingJoin.roomId) return;
@@ -1010,6 +1014,7 @@
 
             socket.on('roomCreated', (data) => {
                 roomId = data.roomId;
+                setRoomUrl(roomId);
                 joinedRoomId = roomId;
                 pendingJoin = { roomId, playerId: data.playerId || myPlayerId };
                 if (rejoinTimer) { clearTimeout(rejoinTimer); rejoinTimer = null; }
@@ -1024,7 +1029,7 @@
                 if (gameMode === 'friend') {
                     document.getElementById('copy-link').style.display = 'inline-block';
                     document.getElementById('copy-link').onclick = () => {
-                        const link = `${window.location.origin}/play/${roomId}`;
+                        const link = `${window.location.origin}/${roomId}`;
                         navigator.clipboard.writeText(link);
                         showToast('Link copied!');
                     };
@@ -1043,6 +1048,7 @@
 
             socket.on('roomJoined', (data) => {
                 roomId = data.roomId;
+                setRoomUrl(roomId);
                 joinedRoomId = roomId;
                 pendingJoin = { roomId, playerId: data.playerId || myPlayerId };
                 if (rejoinTimer) { clearTimeout(rejoinTimer); rejoinTimer = null; }
@@ -1196,9 +1202,10 @@
             showLanding(false);
         }
 
-        // Check URL for /play/:roomId
+        // Check URL for /:roomId and the legacy /play/:roomId form.
         function checkUrlForRoom() {
-            const match = window.location.pathname.match(/\/play\/([a-z0-9]+)/);
+            const match = window.location.pathname.match(/^\/play\/([a-z0-9]+)\/?$/i)
+                || window.location.pathname.match(/^\/([a-z0-9]+)\/?$/i);
             if (match) {
                 const code = match[1];
                 document.getElementById('room-code').value = code;

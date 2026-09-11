@@ -18,7 +18,7 @@ import type { GameMode, Room, PlayerSlot } from "./protocol.ts";
 import { legalMoves } from "./ai/simulation.ts";
 import type { AiAction } from "./ai/simulation.ts";
 import { isWellFormedAiAction } from "./ai/simulation.ts";
-import { saveRoom, getRoom, deleteRoom, listRooms, touchRoom, isRedisEnabled } from "./redis.ts";
+import { saveRoomJson, getRoom, deleteRoom, listRooms, touchRoom, isRedisEnabled } from "./redis.ts";
 
 // --- Computer-opponent worker pool (ARCHITECTURE §4) ---
 // Stateless workers: receive a gameState + difficulty, return a move.
@@ -78,6 +78,7 @@ const OPPONENT_NOTICE_DELAY_MS = 30 * 1000; // 30s grace before telling opponent
 const rooms = new Map<string, Room>();
 const roomTimers = new Map<string, NodeJS.Timeout>();
 const disconnectNotices = new Map<string, NodeJS.Timeout>();
+const roomSaveQueues = new Map<string, Promise<void>>();
 
 // Cache-aside read: memory first, Redis fallback (post-restart recovery).
 async function fetchRoom(roomId: string): Promise<Room | null> {
@@ -95,10 +96,20 @@ async function fetchRoom(roomId: string): Promise<Room | null> {
     return null;
 }
 
-function persist(room: Room): void {
-    // Write-through, fire-and-forget so the hot move path stays fast.
-    // Redis failures only log — the game continues memory-only.
-    void saveRoom(room);
+function persist(room: Room): Promise<void> {
+    // Serialize immediately and write snapshots in order. Without this queue,
+    // overlapping Redis writes can finish out of order and let an older full
+    // game state overwrite the state from a later move.
+    const snapshot = JSON.stringify(room);
+    const previous = roomSaveQueues.get(room.roomId) ?? Promise.resolve();
+    const write = previous
+        .catch(() => undefined)
+        .then(() => saveRoomJson(room.roomId, snapshot));
+    roomSaveQueues.set(room.roomId, write);
+    void write.finally(() => {
+        if (roomSaveQueues.get(room.roomId) === write) roomSaveQueues.delete(room.roomId);
+    });
+    return write;
 }
 
 // --- Express app ---
@@ -111,6 +122,15 @@ app.use(express.static(path.join(__dirname, "..", "..", "client")));
 
 // Catch-all for SPA routing: /play/* serves index.html
 app.get("/play/:roomId", (_req, res) => {
+    res.sendFile(path.join(__dirname, "..", "..", "client", "index.html"));
+});
+// Short room URLs are easier to share and survive a refresh/deployment:
+// https://number-wars.example/abc123
+app.get("/:roomId", (req, res, next) => {
+    if (!/^[a-z0-9]{4,32}$/i.test(req.params.roomId)) {
+        next();
+        return;
+    }
     res.sendFile(path.join(__dirname, "..", "..", "client", "index.html"));
 });
 
@@ -542,8 +562,8 @@ async function triggerAiMove(room: Room) {
         runPostMoveStages(state);
 
         // Broadcast updated state
+        await persist(room);
         io.to(room.roomId).emit("gameState", state);
-        persist(room);
     } finally {
         room.thinking = false;
         persist(room);
@@ -626,8 +646,8 @@ async function triggerComputerMove(room: Room) {
                 : processEffectIntent(room, computerSlot.playerId, move.type, move.target[0]!, move.target[1]!);
             if (!result.error) {
                 runPostMoveStages(state);
+                await persist(room);
                 io.to(room.roomId).emit("gameState", state);
-                persist(room);
                 return;
             }
             // A worker move shouldn't be illegal, but if it is, fall back.
@@ -647,8 +667,8 @@ async function triggerComputerMove(room: Room) {
                 return;
             }
             runPostMoveStages(state);
+            await persist(room);
             io.to(room.roomId).emit("gameState", state);
-            persist(room);
         }
     } finally {
         // Only release the lock if we still own it — a re-triggering event may
@@ -723,7 +743,7 @@ io.on("connection", (socket) => {
 
             socket.emit("roomCreated", {
                 roomId,
-                link: `/play/${roomId}`,
+                link: `/${roomId}`,
                 mode,
                 difficulty: room.difficulty,
                 playerId,
@@ -857,7 +877,7 @@ io.on("connection", (socket) => {
                 return;
             }
 
-            const playerId = socket.data.playerId || getPlayerId(socket) || claimedPlayerId || "";
+            const playerId = claimedPlayerId || socket.data.playerId || getPlayerId(socket) || "";
             const slot = reattachSocketIfKnown(room, playerId, socket);
             if (!slot) {
                 socket.emit("error", "You are not in this room");
@@ -906,9 +926,11 @@ io.on("connection", (socket) => {
             runPostMoveStages(state);
             console.log(`[d] move applied by ${slot.affiliation}; now turn=${state.turn}, history last=${state.gameHistory[state.gameHistory.length-1]?.player}`);
 
-            // Broadcast to the whole room
+            // Persist the complete post-move snapshot before announcing it.
+            // This prevents a deploy immediately after the event from
+            // restoring the pre-move board.
+            await persist(room);
             io.to(roomId).emit("gameState", state);
-            persist(room);
 
             // If playing against an automated opponent, trigger its move
             if ((room.mode === "ai" || room.mode === "computer") && !state.gameOver && state.turn === "red") {
@@ -941,7 +963,7 @@ io.on("connection", (socket) => {
                 return;
             }
 
-            const playerId = socket.data.playerId || getPlayerId(socket) || claimedPlayerId || "";
+            const playerId = claimedPlayerId || socket.data.playerId || getPlayerId(socket) || "";
             const slot = reattachSocketIfKnown(room, playerId, socket);
             if (!slot) {
                 socket.emit("error", "You are not in this room");
@@ -967,8 +989,8 @@ io.on("connection", (socket) => {
 
             runPostMoveStages(state);
 
+            await persist(room);
             io.to(roomId).emit("gameState", state);
-            persist(room);
 
             if ((room.mode === "ai" || room.mode === "computer") && !state.gameOver && state.turn === "red") {
                 setTimeout(async () => {
