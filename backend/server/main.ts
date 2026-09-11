@@ -17,6 +17,7 @@ import { cpus } from "os";
 import type { GameMode, Room, PlayerSlot } from "./protocol.ts";
 import { legalMoves } from "./ai/simulation.ts";
 import type { AiAction } from "./ai/simulation.ts";
+import { saveRoom, getRoom, deleteRoom, listRooms, touchRoom, isRedisEnabled } from "./redis.ts";
 
 // --- Computer-opponent worker pool (ARCHITECTURE §4) ---
 // Stateless workers: receive a gameState + difficulty, return a move.
@@ -72,10 +73,32 @@ const PORT = parseInt(process.env.PORT || "3000", 10);
 const DISCONNECT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes (room expiry)
 const OPPONENT_NOTICE_DELAY_MS = 30 * 1000; // 30s grace before telling opponent
 
-// --- In-memory state ---
+// --- In-memory state (L1 cache; Redis is durable L2) ---
 const rooms = new Map<string, Room>();
 const roomTimers = new Map<string, NodeJS.Timeout>();
 const disconnectNotices = new Map<string, NodeJS.Timeout>();
+
+// Cache-aside read: memory first, Redis fallback (post-restart recovery).
+async function fetchRoom(roomId: string): Promise<Room | null> {
+    const cached = rooms.get(roomId);
+    if (cached) {
+        void touchRoom(roomId);
+        return cached;
+    }
+    const persisted = await getRoom(roomId);
+    if (persisted) {
+        rooms.set(roomId, persisted);
+        void touchRoom(roomId);
+        return persisted;
+    }
+    return null;
+}
+
+function persist(room: Room): void {
+    // Write-through, fire-and-forget so the hot move path stays fast.
+    // Redis failures only log — the game continues memory-only.
+    void saveRoom(room);
+}
 
 // --- Express app ---
 const app = express();
@@ -166,6 +189,7 @@ function scheduleRoomExpiryIfAllGone(room: Room) {
     const timer = setTimeout(() => {
         rooms.delete(room.roomId);
         roomTimers.delete(room.roomId);
+        void deleteRoom(room.roomId);
         io.to(room.roomId).emit("error", "Room expired due to inactivity");
         console.log(`[room] ${room.roomId} destroyed (timeout)`);
     }, DISCONNECT_TIMEOUT_MS);
@@ -177,10 +201,10 @@ function scheduleOpponentNotice(room: Room, slot: PlayerSlot) {
     if (room.mode === "ai" || room.mode === "computer") return;
     const key = `${room.roomId}:${slot.playerId}`;
     if (disconnectNotices.has(key)) return;
-    const timer = setTimeout(() => {
+    const timer = setTimeout(async () => {
         disconnectNotices.delete(key);
         // Only notify if the player is still gone (no quick reconnect).
-        const current = rooms.get(room.roomId);
+        const current = (rooms.get(room.roomId) ?? await getRoom(room.roomId)) as Room | null;
         if (!current) return;
         const currentSlot = current.players.find(p => p.playerId === slot.playerId);
         if (!currentSlot || currentSlot.connected) return;
@@ -502,8 +526,10 @@ async function triggerAiMove(room: Room) {
 
         // Broadcast updated state
         io.to(room.roomId).emit("gameState", state);
+        persist(room);
     } finally {
         room.thinking = false;
+        persist(room);
     }
 }
 
@@ -594,10 +620,12 @@ async function triggerComputerMove(room: Room) {
 
         runPostMoveStages(state);
         io.to(room.roomId).emit("gameState", state);
+        persist(room);
     } finally {
         // Only release the lock if we still own it — a re-triggering event may
         // have re-entered and started a fresh bot turn while we were awaiting.
         if (room.thinking) room.thinking = false;
+        persist(room);
     }
 }
 
@@ -607,7 +635,7 @@ io.on("connection", (socket) => {
     console.log(`[connect] ${socket.id}`);
 
     // --- Create Room ---
-    socket.on("createRoom", ({ mode, difficulty }: { mode: GameMode; difficulty?: ComputerDifficulty }) => {
+    socket.on("createRoom", async ({ mode, difficulty }: { mode: GameMode; difficulty?: ComputerDifficulty }) => {
         try {
             const roomId = generateRoomId();
             const playerId = randomUUID();
@@ -649,6 +677,7 @@ io.on("connection", (socket) => {
             }
 
             rooms.set(roomId, room);
+            persist(room);
             socket.join(roomId);
 
             // Set playerId cookie via socket handshake response
@@ -675,9 +704,9 @@ io.on("connection", (socket) => {
     // sent explicitly or remembered on this socket) always reclaims that seat
     // — even if the room otherwise looks "full". Only genuinely new players
     // are subject to the capacity check.
-    socket.on("joinRoom", ({ roomId, playerId: claimedPlayerId }: { roomId: string; playerId?: string }) => {
+    socket.on("joinRoom", async ({ roomId, playerId: claimedPlayerId }: { roomId: string; playerId?: string }) => {
         try {
-            const room = rooms.get(roomId);
+            const room = await fetchRoom(roomId);
             if (!room) {
                 socket.emit("error", "Room not found or expired");
                 return;
@@ -687,6 +716,7 @@ io.on("connection", (socket) => {
 
             const reattach = (slot: PlayerSlot, isNewSeat: boolean) => {
                 attachSocketToSlot(room, slot, socket);
+                persist(room);
                 socket.emit("gameState", room.state);
                 socket.emit("roomJoined", {
                     roomId: room.roomId,
@@ -756,6 +786,7 @@ io.on("connection", (socket) => {
                 connected: true,
             };
             room.players.push(newSlot);
+            persist(room);
             socket.data.playerId = newPlayerId;
             socket.join(roomId);
             cancelRoomExpiry(roomId);
@@ -776,9 +807,9 @@ io.on("connection", (socket) => {
     });
 
     // --- Move ---
-    socket.on("move", ({ roomId, destination, fromPosition }: { roomId: string; destination: [number, number]; fromPosition?: [number, number] }) => {
+    socket.on("move", async ({ roomId, destination, fromPosition }: { roomId: string; destination: [number, number]; fromPosition?: [number, number] }) => {
         try {
-            const room = rooms.get(roomId);
+            const room = await fetchRoom(roomId);
             if (!room) {
                 socket.emit("error", "Room not found");
                 return;
@@ -841,13 +872,16 @@ io.on("connection", (socket) => {
 
             // Broadcast to the whole room
             io.to(roomId).emit("gameState", state);
+            persist(room);
 
             // If playing against an automated opponent, trigger its move
             if ((room.mode === "ai" || room.mode === "computer") && !state.gameOver && state.turn === "red") {
                 // Small delay so the human sees the board update before the opponent "thinks"
-                setTimeout(() => {
-                    if (room.mode === "ai") triggerAiMove(room);
-                    else triggerComputerMove(room);
+                setTimeout(async () => {
+                    const fresh = (rooms.get(roomId) ?? await getRoom(roomId)) as Room | null;
+                    if (!fresh) return;
+                    if (fresh.mode === "ai") triggerAiMove(fresh);
+                    else triggerComputerMove(fresh);
                 }, 500);
             }
         } catch (err: any) {
@@ -857,9 +891,9 @@ io.on("connection", (socket) => {
     });
 
     // --- Use Effect ---
-    socket.on("useEffect", ({ roomId, effect, targetPosition }: { roomId: string; effect: string; targetPosition: [number, number] }) => {
+    socket.on("useEffect", async ({ roomId, effect, targetPosition }: { roomId: string; effect: string; targetPosition: [number, number] }) => {
         try {
-            const room = rooms.get(roomId);
+            const room = await fetchRoom(roomId);
             if (!room) {
                 socket.emit("error", "Room not found");
                 return;
@@ -898,11 +932,14 @@ io.on("connection", (socket) => {
             runPostMoveStages(state);
 
             io.to(roomId).emit("gameState", state);
+            persist(room);
 
             if ((room.mode === "ai" || room.mode === "computer") && !state.gameOver && state.turn === "red") {
-                setTimeout(() => {
-                    if (room.mode === "ai") triggerAiMove(room);
-                    else triggerComputerMove(room);
+                setTimeout(async () => {
+                    const fresh = (rooms.get(roomId) ?? await getRoom(roomId)) as Room | null;
+                    if (!fresh) return;
+                    if (fresh.mode === "ai") triggerAiMove(fresh);
+                    else triggerComputerMove(fresh);
                 }, 500);
             }
         } catch (err: any) {
@@ -915,9 +952,9 @@ io.on("connection", (socket) => {
     // Restart a finished game with the SAME players/seats. Any human in the
     // room may request it once the game is over; the board is reset and the
     // new state is broadcast to everyone in the room.
-    socket.on("rematch", ({ roomId }: { roomId: string }) => {
+    socket.on("rematch", async ({ roomId }: { roomId: string }) => {
         try {
-            const room = rooms.get(roomId);
+            const room = await fetchRoom(roomId);
             if (!room) {
                 socket.emit("error", "Room not found");
                 return;
@@ -937,6 +974,7 @@ io.on("connection", (socket) => {
             room.state = fresh as unknown as typeof room.state;
             room.thinking = false;
             cancelRoomExpiry(roomId);
+            persist(room);
             console.log(`[room] ${roomId} rematch started by ${playerId}`);
             io.to(roomId).emit("gameState", room.state);
         } catch (err: any) {
@@ -947,9 +985,9 @@ io.on("connection", (socket) => {
     // --- Leave Room (quit to home) ---
     // Voluntary quit: leave the socket.io room, free the seat for expiry,
     // and notify the opponent right away (no 30s grace like a drop).
-    socket.on("leaveRoom", ({ roomId }: { roomId: string }) => {
+    socket.on("leaveRoom", async ({ roomId }: { roomId: string }) => {
         try {
-            const room = rooms.get(roomId);
+            const room = await fetchRoom(roomId);
             if (!room) return;
             const playerId = socket.data.playerId || getPlayerId(socket);
             const slot = room.players.find(p => p.playerId === playerId);
@@ -965,6 +1003,7 @@ io.on("connection", (socket) => {
                 socket.to(roomId).emit("opponentDisconnected", payload);
             }
             console.log(`[room] ${playerId} quit ${roomId} (${slot.affiliation})`);
+            persist(room);
             scheduleRoomExpiryIfAllGone(room);
         } catch (err: any) {
             console.error("[leaveRoom] Error:", err);
@@ -976,7 +1015,7 @@ io.on("connection", (socket) => {
     // reclaim it. The opponent is only notified after a 30s grace period
     // (quick refreshes stay silent); the room itself expires after 15 min
     // only when ALL human seats are gone.
-    socket.on("disconnect", () => {
+    socket.on("disconnect", async () => {
         console.log(`[disconnect] ${socket.id}`);
 
         for (const [_roomId, room] of rooms) {
@@ -986,6 +1025,7 @@ io.on("connection", (socket) => {
                 slot.connected = false;
                 slot.socketId = null;
                 (slot as any).disconnectedAt = Date.now();
+                persist(room);
                 scheduleOpponentNotice(room, slot);
                 scheduleRoomExpiryIfAllGone(room);
                 break;
@@ -996,9 +1036,38 @@ io.on("connection", (socket) => {
 
 // ==================== Start server ====================
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, async () => {
     console.log(`[server] Number Wars running on http://localhost:${PORT}`);
     console.log(`[server] LLM_API_KEY set: ${!!process.env.LLM_API_KEY}`);
+    console.log(`[server] Redis persistence: ${isRedisEnabled() ? "enabled" : "disabled (memory-only)"}`);
+
+    // Boot recovery: reload rooms persisted before a restart/redeploy so
+    // live games survive. Bot turns interrupted mid-thinking are resumed.
+    if (isRedisEnabled()) {
+        try {
+            const persisted = await listRooms();
+            for (const room of persisted) {
+                rooms.set(room.roomId, room);
+            }
+            if (persisted.length > 0) {
+                console.log(`[redis] recovered ${persisted.length} room(s) from persistence`);
+                for (const room of persisted) {
+                    const state = room.state as gameState;
+                    if (!state.gameOver && state.turn === "red" && !room.thinking) {
+                        if (room.mode === "ai") {
+                            console.log(`[redis] resuming AI turn in ${room.roomId}`);
+                            void triggerAiMove(room);
+                        } else if (room.mode === "computer") {
+                            console.log(`[redis] resuming computer turn in ${room.roomId}`);
+                            void triggerComputerMove(room);
+                        }
+                    }
+                }
+            }
+        } catch (err: any) {
+            console.error("[redis] boot recovery failed:", err.message);
+        }
+    }
 });
 
 export { app, httpServer, io };
