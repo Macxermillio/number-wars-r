@@ -642,7 +642,7 @@ async function triggerComputerMove(room: Room) {
     }
 }
 
-// ==================== Socket.IO handlers ====================
+// ==================== Socket.IO handlers =====================
 
 io.on("connection", (socket) => {
     console.log(`[connect] ${socket.id}`);
