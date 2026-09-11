@@ -9,6 +9,7 @@
 > `ARCHITECTURE.md §5.5 Stage 7` and §11 event map). It intentionally avoids
 > re-specifying server behavior — that lives in ARCHITECTURE.md.
 
+
 ---
 
 ## 1. Design goals
