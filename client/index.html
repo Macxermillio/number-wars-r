@@ -754,7 +754,7 @@
             <div class="flex items-center flex-wrap gap-2 sm:gap-3 text-xs sm:text-sm font-fredoka" id="header-info">
                 <div class="flex items-center gap-1.5 bg-purple-50 text-candy-purple font-semibold px-3.5 py-1.5 rounded-full border border-purple-200">
                     <span class="text-purple-400">Room:</span>
-                    <span class="font-bold text-slate-800" id="room-id-display">—</span>
+                    <button id="room-id-display" type="button" onclick="copyRoomId()" title="Copy room number" aria-label="Copy room number" class="font-bold text-slate-800 underline decoration-dotted underline-offset-2 hover:text-candy-purple hover:decoration-solid active:scale-95 transition cursor-copy">—</button>
                 </div>
                 <div class="flex items-center gap-1.5 bg-candy-pink/10 text-candy-deepPink font-bold px-3 py-1.5 rounded-full border border-pink-200 shadow-sm">
                     <span class="w-2 h-2 rounded-full bg-candy-pink animate-pulse"></span>
@@ -918,6 +918,27 @@
             el.classList.add('show');
             if (toastTimer) clearTimeout(toastTimer);
             toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
+        }
+
+        // The room number is also a copy button so players can quickly share
+        // it without having to select the text manually.
+        async function copyRoomId() {
+            const roomEl = document.getElementById('room-id-display');
+            const code = roomEl?.textContent?.trim();
+            if (!code || code === '—') return;
+            try {
+                await navigator.clipboard.writeText(code);
+            } catch (e) {
+                const input = document.createElement('textarea');
+                input.value = code;
+                input.style.position = 'fixed';
+                input.style.opacity = '0';
+                document.body.appendChild(input);
+                input.select();
+                document.execCommand('copy');
+                input.remove();
+            }
+            showToast(`Room number ${code} copied!`);
         }
 
         // ============ Socket Connection ============
