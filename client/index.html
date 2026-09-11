@@ -873,6 +873,16 @@
                 return raw ? JSON.parse(raw) : null;
             } catch (e) { return null; }
         }
+        const ACTIVE_ROOM_KEY = 'nw:active-room';
+        function saveActiveRoom(rid) {
+            try { if (rid) localStorage.setItem(ACTIVE_ROOM_KEY, rid); } catch (e) { /* ignore */ }
+        }
+        function loadActiveRoom() {
+            try { return localStorage.getItem(ACTIVE_ROOM_KEY); } catch (e) { return null; }
+        }
+        function clearActiveRoom() {
+            try { localStorage.removeItem(ACTIVE_ROOM_KEY); } catch (e) { /* ignore */ }
+        }
 
         const host = window.location.host;
         // Backend URL: explicit override (Vercel client → Railway backend),
@@ -963,7 +973,11 @@
         }
         function setRoomUrl(code) {
             if (!code) return;
-            try { window.history.replaceState({}, '', `/${code}`); } catch (e) { /* ignore */ }
+            saveActiveRoom(code);
+            // /play/:roomId is supported by both Vercel and the Railway
+            // server. Keep the room in the address bar so a deployment or
+            // refresh cannot send the player back to the lobby.
+            try { window.history.replaceState({}, '', `/play/${code}`); } catch (e) { /* ignore */ }
         }
         function scheduleRejoin() {
             if (rejoinTimer) clearTimeout(rejoinTimer);
@@ -1206,8 +1220,8 @@
         function checkUrlForRoom() {
             const match = window.location.pathname.match(/^\/play\/([a-z0-9]+)\/?$/i)
                 || window.location.pathname.match(/^\/([a-z0-9]+)\/?$/i);
-            if (match) {
-                const code = match[1];
+            const code = match ? match[1] : loadActiveRoom();
+            if (code) {
                 document.getElementById('room-code').value = code;
                 joinByCode();
             }
@@ -2308,6 +2322,7 @@
             try { window.history.pushState({}, '', '/'); } catch (e) { /* ignore */ }
             roomId = null;
             pendingJoin = null;
+            clearActiveRoom();
             if (rejoinTimer) { clearTimeout(rejoinTimer); rejoinTimer = null; }
             gameState = null;
             selection = null;
