@@ -244,7 +244,7 @@ function reattachSocketIfKnown(room: Room, playerId: string, socket: any): Playe
     }
     return slot;
 }
-
+//Need
 // Return the AI/computer player slot, creating it on demand if missing.
 // The AI is red and has no socket, so it can never conflict with a human.
 function getAiPlayer(room: Room): PlayerSlot {
