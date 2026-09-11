@@ -6,10 +6,11 @@ import { legalActions, cloneState, applyAction, evaluateState, distToStarFocus }
 // Hard/Insane-mode Computer opponent: minimax search with alpha-beta pruning
 // and move ordering by capture/shard/merge/star-zone value.
 // - hard:   depth 3, balanced tournament play.
-// - insane: depth 4 (one extra move in advance), star-win obsessed and the
-//           strongest/toughest bot. It takes an immediate star win over
-//           everything, denies the opponent's star win, and sees tactics one
-//           full round deeper than hard.
+// - insane: depth 5 with iterative deepening + time budget, star-win obsessed
+//           and the strongest/toughest bot. It takes an immediate star win
+//           over everything, denies the opponent's star win, pre-positions
+//           for upcoming star spawns, keeps mobility splits, and sees tactics
+//           one full round deeper than hard.
 // Plays red (or any affiliation).
 // ============================================================================
 
@@ -20,7 +21,7 @@ const transposition = new Map<string, CacheEntry>();
 
 const MAX_DEPTH: Record<MinimaxDifficulty, number> = {
     hard: 3,
-    insane: 4,
+    insane: 5,
 };
 
 // Terminal score helpers so forced wins propagate up the tree even when
@@ -68,14 +69,38 @@ export function isMeaningfulSplit(state: gameState, action: AiAction, affiliatio
     if (action.type !== "split") return true;
     const beforeMobility = legalMovesForEvaluation(state, affiliation);
     const beforeCaptures = captureCount(state, affiliation);
+    const beforeStar = minStarDistance(state, affiliation);
     const sim = cloneState(state);
     if (applyAction(sim, action).error) return false;
     const mobilityDelta = legalMovesForEvaluation(sim, affiliation) - beforeMobility;
     const captureDelta = captureCount(sim, affiliation) - beforeCaptures;
-    // Splitting normally reduces total armor and can reduce range, so a small
-    // mobility increase is not enough to justify it. Require a concrete new
-    // capture or a substantial mobility gain.
-    return captureDelta > 0 || mobilityDelta >= 6;
+    const starDelta = beforeStar - minStarDistance(sim, affiliation);
+    // Splitting normally reduces total armor and can reduce range, so require
+    // a concrete new capture, a solid mobility gain, or a clearly better
+    // star-contest position (extra body near the live star / spawn focus).
+    return captureDelta > 0 || mobilityDelta >= 4 || starDelta >= 2;
+}
+
+function minStarDistance(state: gameState, affiliation: "red" | "blue"): number {
+    const pieces = affiliation === "red" ? state.redPieces : state.bluePieces;
+    if (pieces.length === 0) return 99;
+    const starKey = (Object.entries(state.board) as [string, { star?: boolean }][]).find(([, sq]) => sq.star === true)?.[0];
+    if (starKey) {
+        const [sc, sr] = starKey.split(",").map(Number) as [number, number];
+        return Math.min(...pieces.map((p) => Math.abs(p.position[0] - sc) + Math.abs(p.position[1] - sr)));
+    }
+    return Math.min(...pieces.map((p) => distToStarFocus(p.position[0], p.position[1])));
+}
+
+// How urgently should Insane contest star positioning? 3x when a star is
+// live or dropping within 2 turns, 2x within 5 turns, else 1x.
+function starUrgency(state: gameState): number {
+    const live = (Object.values(state.board) as { star?: boolean }[]).some((sq) => sq.star === true);
+    if (live) return 3;
+    const turnsAway = (state.starTurn ?? 0) - (state.turnCount ?? 0);
+    if (turnsAway <= 2) return 3;
+    if (turnsAway <= 5) return 2;
+    return 1;
 }
 
 function legalMovesForEvaluation(state: gameState, affiliation: "red" | "blue"): number {
@@ -95,10 +120,17 @@ function orderMoves(state: gameState, moves: AiAction[], affiliation: "red" | "b
     const enemyStars = affiliation === "red" ? state.blueStars : state.redStars;
     const iWinWithStar = myStars + 1 >= starsToWin;
     const enemyWinsWithStar = enemyStars + 1 >= starsToWin;
+    const urgency = difficulty === "insane" ? starUrgency(state) : 1;
     const ranked = moves.map((mv) => {
         let score = 0;
         if (mv.type !== "move") {
-            score += mv.type === "strengthen" ? 90 : mv.type === "weaken" ? 80 : -100;
+            if (mv.type === "split") {
+                // Meaningful mobility/star splits compete with quiet moves;
+                // pointless splits stay at the very bottom so breadth caps drop them first.
+                score += isMeaningfulSplit(state, mv, affiliation) ? 140 : -100;
+            } else {
+                score += mv.type === "strengthen" ? 90 : 80;
+            }
             return { mv, score };
         }
         const to = state.board[`${mv.to[0]},${mv.to[1]}`];
@@ -115,9 +147,9 @@ function orderMoves(state: gameState, moves: AiAction[], affiliation: "red" | "b
         // Star-zone contest: prefer moves that land on/near the live star,
         // or (no star on board) near the hot-zone squares where the next
         // star will spawn, so positional moves are searched first.
-        // Insane contests harder: bigger zone bonus, and extra bonus for
-        // sitting on the star when the enemy would win by taking it.
-        const zoneMul = difficulty === "insane" ? 2 : 1;
+        // Insane contests harder and scales with urgency: a live/imminent
+        // star is worth far more than a distant future spawn.
+        const zoneMul = difficulty === "insane" ? 2 * urgency : 1;
         if (starPos) {
             const d = Math.abs(mv.to[0] - starPos[0]) + Math.abs(mv.to[1] - starPos[1]);
             score += Math.max(0, 12 - d) * 6 * zoneMul;
@@ -132,43 +164,86 @@ function orderMoves(state: gameState, moves: AiAction[], affiliation: "red" | "b
     return ranked.map((r) => r.mv);
 }
 
+const INSANE_TIME_BUDGET_MS = Math.max(
+    250,
+    parseInt(process.env.COMPUTER_INSANE_MS || "1800", 10) || 1800
+);
+
+// Breadth caps scaled by remaining depth so depth 5 stays affordable.
+// Root keeps the widest beam (star/capture/meaningful-split moves first);
+// deeper plies get progressively narrower.
+function breadthCap(depthRemaining: number, isRoot: boolean): number {
+    if (isRoot) return 18;
+    if (depthRemaining >= 4) return 10;
+    if (depthRemaining === 3) return 8;
+    if (depthRemaining === 2) return 6;
+    return 5;
+}
+
+class SearchTimeout extends Error {}
+
+type SearchCtx = { deadline: number; nodes: number };
+
 export function pickMinimaxMove(state: gameState, affiliation: "red" | "blue", difficulty: MinimaxDifficulty = "hard"): AiAction | null {
     if (difficulty === "insane" && transposition.size > 50000) transposition.clear();
-    const moves = orderMoves(state, legalActions(state, affiliation), affiliation, difficulty);
-    if (moves.length === 0) return null;
+    const ordered = orderMoves(state, legalActions(state, affiliation), affiliation, difficulty);
+    if (ordered.length === 0) return null;
 
     // Insane instant-win pre-check: if any legal move wins RIGHT NOW
     // (star win or wiping the enemy), take it without searching. This
     // guarantees the bot never "thinks past" a forced win.
     if (difficulty === "insane") {
-        for (const mv of moves) {
+        for (const mv of ordered) {
             if (moveWinsImmediately(state, mv, affiliation)) return mv;
         }
-        // Depth 4 with 100+ legal moves is unaffordable at full width.
-        // The instant-win scan above already covered EVERY move, so capping
-        // the root to the most promising ordered moves is safe: captures,
-        // winning/denying stars and star-zone moves are all ranked first.
-        if (moves.length > 24) moves.splice(24);
-        moves = moves.filter((mv) => mv.type !== "split" || isMeaningfulSplit(state, mv, affiliation));
-        if (moves.length === 0) return null;
     }
 
-    let bestMove: AiAction | null = null;
-    let bestScore = -Infinity;
-    const depth = MAX_DEPTH[difficulty];
+    if (difficulty !== "insane") {
+        let bestMove: AiAction | null = null;
+        let bestScore = -Infinity;
+        for (const mv of ordered) {
+            const sim = cloneState(state);
+            if (applyAction(sim, mv).error) continue;
+            const score = minimax(sim, MAX_DEPTH[difficulty] - 1, -Infinity, Infinity, affiliation === "red" ? "blue" : "red", affiliation, difficulty);
+            if (score > bestScore) {
+                bestScore = score;
+                bestMove = mv;
+            }
+        }
+        return bestMove;
+    }
 
-    for (const mv of moves) {
-        const sim = cloneState(state);
-        const res = applyAction(sim, mv);
-        if (res.error) continue;
-
-        const score = minimax(sim, depth - 1, -Infinity, Infinity, affiliation === "red" ? "blue" : "red", affiliation, difficulty);
-        if (score > bestScore) {
-            bestScore = score;
-            bestMove = mv;
+    // Insane: iterative deepening 1..5 under a time budget. The instant-win
+    // scan above already covered EVERY move, so capping the root to the most
+    // promising ordered moves is safe: captures, winning/denying stars,
+    // star-zone moves and meaningful mobility splits rank first.
+    const rootMoves = ordered.slice(0, breadthCap(99, true))
+        .filter((mv) => mv.type !== "split" || isMeaningfulSplit(state, mv, affiliation));
+    if (rootMoves.length === 0) return null;
+    const ctx: SearchCtx = { deadline: Date.now() + INSANE_TIME_BUDGET_MS, nodes: 0 };
+    let bestMove: AiAction | null = rootMoves[0] ?? null;
+    for (let depth = 1; depth <= MAX_DEPTH.insane; depth++) {
+        try {
+            let iterBest: AiAction | null = null;
+            let iterScore = -Infinity;
+            let alpha = -Infinity;
+            for (const mv of rootMoves) {
+                const sim = cloneState(state);
+                if (applyAction(sim, mv).error) continue;
+                const score = minimax(sim, depth - 1, alpha, Infinity, affiliation === "red" ? "blue" : "red", affiliation, difficulty, ctx);
+                if (score > iterScore) {
+                    iterScore = score;
+                    iterBest = mv;
+                }
+                alpha = Math.max(alpha, iterScore);
+            }
+            if (iterBest) bestMove = iterBest;
+            if (Date.now() >= ctx.deadline) break;
+        } catch (e) {
+            if (e instanceof SearchTimeout) break;
+            throw e;
         }
     }
-
     return bestMove;
 }
 
@@ -181,14 +256,16 @@ function minimax(
     beta: number,
     turnAffiliation: "red" | "blue",
     rootAffiliation: "red" | "blue",
-    difficulty: MinimaxDifficulty = "hard"
+    difficulty: MinimaxDifficulty = "hard",
+    ctx?: SearchCtx
 ): number {
+    if (ctx && (++ctx.nodes % 512 === 0) && Date.now() >= ctx.deadline) throw new SearchTimeout();
     // Forced wins/losses propagate immediately at any depth — insane must
-    // see a star win coming even 3 plies out and never trade it away.
+    // see a star win coming even 4 plies out and never trade it away.
     const terminal = terminalScore(state, rootAffiliation);
     if (terminal !== null) return terminal;
     if (depth <= 0) {
-        return evaluateState(state, rootAffiliation);
+        return quiescence(state, alpha, beta, rootAffiliation, difficulty, ctx);
     }
 
     const key = `${rootAffiliation}:${stateKey(state)}`;
@@ -202,15 +279,12 @@ function minimax(
         // as a pass).
         return evaluateState(state, rootAffiliation);
     }
-    // Insane searches one ply deeper (depth 4 vs hard's 3). To keep that
-    // affordable, cap breadth on non-root nodes to the most promising
-    // ordered moves — alpha-beta then prunes the rest. Root still searches
-    // everything so no winning move is blind-spotted.
-    if (difficulty === "insane" && moves.length > 28) {
-        moves = moves.slice(0, 28);
-    }
+    // Depth-scaled breadth caps keep depth 5 affordable: alpha-beta prunes
+    // the rest while star/capture/meaningful-split moves are searched first.
     if (difficulty === "insane") {
         moves = moves.filter((mv) => mv.type !== "split" || isMeaningfulSplit(state, mv, turnAffiliation));
+        const cap = breadthCap(depth, false);
+        if (moves.length > cap) moves = moves.slice(0, cap);
     }
 
     let best = isMax ? -Infinity : Infinity;
@@ -219,7 +293,7 @@ function minimax(
         const res = applyAction(sim, mv);
         if (res.error) continue;
         const nextTurn = turnAffiliation === "red" ? "blue" : "red";
-        const score = minimax(sim, depth - 1, alpha, beta, nextTurn, rootAffiliation, difficulty);
+        const score = minimax(sim, depth - 1, alpha, beta, nextTurn, rootAffiliation, difficulty, ctx);
 
         if (isMax) {
             best = Math.max(best, score);
@@ -232,5 +306,49 @@ function minimax(
     }
 
     transposition.set(key, { depth, score: best });
+    return best;
+}
+
+// Quiescence: at depth 0, keep searching captures, star grabs/denials and
+// meaningful mobility splits so Insane never stops mid-tactic and mistakes
+// a hanging piece or an open star for a quiet position.
+function quiescence(
+    state: gameState,
+    alpha: number,
+    beta: number,
+    rootAffiliation: "red" | "blue",
+    difficulty: MinimaxDifficulty,
+    ctx?: SearchCtx
+): number {
+    if (ctx && (++ctx.nodes % 512 === 0) && Date.now() >= ctx.deadline) throw new SearchTimeout();
+    const terminal = terminalScore(state, rootAffiliation);
+    if (terminal !== null) return terminal;
+    const standPat = evaluateState(state, rootAffiliation);
+    if (difficulty !== "insane") return standPat;
+    const isMax = state.turn === rootAffiliation;
+    let best = standPat;
+    if (isMax) alpha = Math.max(alpha, best);
+    else beta = Math.min(beta, best);
+    if (beta <= alpha) return best;
+    const tactical = orderMoves(state, legalActions(state, state.turn), state.turn, difficulty)
+        .filter((mv) => {
+            if (mv.type !== "move") return mv.type === "split" && isMeaningfulSplit(state, mv, state.turn);
+            const sq = state.board[`${mv.to[0]},${mv.to[1]}`];
+            return !!sq?.tenant || !!sq?.star;
+        })
+        .slice(0, 8);
+    for (const mv of tactical) {
+        const sim = cloneState(state);
+        if (applyAction(sim, mv).error) continue;
+        const score = quiescence(sim, alpha, beta, rootAffiliation, difficulty, ctx);
+        if (isMax) {
+            best = Math.max(best, score);
+            alpha = Math.max(alpha, best);
+        } else {
+            best = Math.min(best, score);
+            beta = Math.min(beta, best);
+        }
+        if (beta <= alpha) break;
+    }
     return best;
 }
