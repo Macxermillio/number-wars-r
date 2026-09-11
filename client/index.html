@@ -942,6 +942,44 @@
         }
 
         // ============ Socket Connection ============
+        // Tracks the room we are (re)joining so reconnects after a backend
+        // restart can re-emit joinRoom automatically — the user never has to
+        // quit and re-enter the room code by hand.
+        let pendingJoin = null; // { roomId, playerId }
+        let rejoinTimer = null;
+        function buildJoinPayload(code) {
+            const seat = loadSeat(code);
+            const payload = { roomId: code };
+            if (seat && seat.playerId) payload.playerId = seat.playerId;
+            else if (myPlayerId) payload.playerId = myPlayerId;
+            return payload;
+        }
+        function emitJoin(code) {
+            if (!socket) return;
+            const payload = buildJoinPayload(code);
+            if (socket.connected) socket.emit('joinRoom', payload);
+            else socket.once('connect', () => socket.emit('joinRoom', payload));
+        }
+        function scheduleRejoin() {
+            if (rejoinTimer) clearTimeout(rejoinTimer);
+            if (!pendingJoin || !pendingJoin.roomId) return;
+            // Retry joinRoom a few times: right after a deploy the room may
+            // still be loading from Redis on the fresh backend.
+            let attempts = 0;
+            const tick = () => {
+                if (!pendingJoin || !pendingJoin.roomId) return;
+                // Stop once the server has accepted us (roomJoined/gameState).
+                if (gameState && roomId === pendingJoin.roomId) return;
+                if (attempts >= 6) {
+                    showToast('Still reconnecting… re-enter room code if this persists');
+                    return;
+                }
+                attempts += 1;
+                emitJoin(pendingJoin.roomId);
+                rejoinTimer = setTimeout(tick, 1500);
+            };
+            rejoinTimer = setTimeout(tick, 800);
+        }
         function connectSocket(pendingRoomId) {
             // Reuse the live socket when we already have one.
             if (socket && socket.connected) return socket;
@@ -958,10 +996,18 @@
 
             socket.on('connect', () => {
                 console.log('[WS] Connected:', socket.id);
+                // Backend restarted mid-game: the new process knows the room
+                // (Redis) but not our socket — rejoin automatically.
+                if (pendingJoin && pendingJoin.roomId && !gameState) {
+                    emitJoin(pendingJoin.roomId);
+                    scheduleRejoin();
+                }
             });
 
             socket.on('roomCreated', (data) => {
                 roomId = data.roomId;
+                pendingJoin = { roomId, playerId: data.playerId || myPlayerId };
+                if (rejoinTimer) { clearTimeout(rejoinTimer); rejoinTimer = null; }
                 gameMode = data.mode || 'friend';
                 myAffiliation = data.affiliation || 'blue';
                 myPlayerId = data.playerId || myPlayerId;
@@ -992,6 +1038,8 @@
 
             socket.on('roomJoined', (data) => {
                 roomId = data.roomId;
+                pendingJoin = { roomId, playerId: data.playerId || myPlayerId };
+                if (rejoinTimer) { clearTimeout(rejoinTimer); rejoinTimer = null; }
                 gameMode = data.mode;
                 myAffiliation = data.affiliation;
                 myPlayerId = data.playerId || myPlayerId;
@@ -1078,10 +1126,20 @@
 
             socket.on('error', (msg) => {
                 showToast(msg);
+                // Deploy race: our socket is fresh but joinRoom hasn't landed
+                // yet (or the room was still loading from Redis). Retry the
+                // join instead of leaving the player stuck with
+                // "You are not in this room".
+                if (typeof msg === 'string' && /not in this room|room not found/i.test(msg) && pendingJoin && pendingJoin.roomId) {
+                    scheduleRejoin();
+                }
             });
 
-            socket.on('disconnect', () => {
-                showToast('Disconnected from server');
+            socket.on('disconnect', (reason) => {
+                showToast('Disconnected from server — reconnecting…');
+                // Socket.IO auto-reconnects; on 'connect' we re-emit joinRoom.
+                // Keep pendingJoin so the rejoin path above fires.
+                console.log('[WS] disconnect:', reason);
             });
         }
 
@@ -1122,14 +1180,10 @@
             const code = document.getElementById('room-code').value.trim().toLowerCase();
             if (code.length < 4) { showToast('Enter a valid room code'); return; }
             roomId = code;
+            gameState = null;
+            pendingJoin = { roomId: code, playerId: (loadSeat(code) || {}).playerId || myPlayerId };
             connectSocket(code);
-            // Send our stored seat so the server recognises a reconnect.
-            const seat = loadSeat(code);
-            const payload = { roomId: code };
-            if (seat && seat.playerId) payload.playerId = seat.playerId;
-            else if (myPlayerId) payload.playerId = myPlayerId;
-            if (socket.connected) socket.emit('joinRoom', payload);
-            else socket.once('connect', () => socket.emit('joinRoom', payload));
+            emitJoin(code);
             showLanding(false);
         }
 
@@ -2233,6 +2287,8 @@
             document.getElementById('game-over-overlay').className = '';
             try { window.history.pushState({}, '', '/'); } catch (e) { /* ignore */ }
             roomId = null;
+            pendingJoin = null;
+            if (rejoinTimer) { clearTimeout(rejoinTimer); rejoinTimer = null; }
             gameState = null;
             selection = null;
             armedEffect = null;

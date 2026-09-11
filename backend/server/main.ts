@@ -646,6 +646,13 @@ async function triggerComputerMove(room: Room) {
 
 io.on("connection", (socket) => {
     console.log(`[connect] ${socket.id}`);
+    // Seed identity from handshake auth so move/useEffect work even if the
+    // client's joinRoom re-emit is still in flight after a server restart.
+    // The authoritative re-attach still happens in joinRoom (socket.join +
+    // slot update); this just prevents "You are not in this room" races.
+    if (!socket.data?.playerId && socket.handshake.auth?.playerId) {
+        socket.data.playerId = socket.handshake.auth.playerId as string;
+    }
 
     // --- Create Room ---
     socket.on("createRoom", async ({ mode, difficulty }: { mode: GameMode; difficulty?: ComputerDifficulty }) => {
@@ -1028,21 +1035,40 @@ io.on("connection", (socket) => {
     // reclaim it. The opponent is only notified after a 30s grace period
     // (quick refreshes stay silent); the room itself expires after 15 min
     // only when ALL human seats are gone.
+    // NOTE: after a restart, rooms live in Redis but not in the local Map —
+    // scan Redis too so disconnects of recovered rooms still persist.
     socket.on("disconnect", async () => {
         console.log(`[disconnect] ${socket.id}`);
 
-        for (const [_roomId, room] of rooms) {
+        const markGone = (room: Room) => {
             const slot = room.players.find(p => p.socketId === socket.id);
-            if (slot) {
-                if (isBotSlot(slot)) break;
-                slot.connected = false;
-                slot.socketId = null;
-                (slot as any).disconnectedAt = Date.now();
-                persist(room);
-                scheduleOpponentNotice(room, slot);
-                scheduleRoomExpiryIfAllGone(room);
-                break;
-            }
+            if (!slot || isBotSlot(slot)) return false;
+            slot.connected = false;
+            slot.socketId = null;
+            (slot as any).disconnectedAt = Date.now();
+            persist(room);
+            scheduleOpponentNotice(room, slot);
+            scheduleRoomExpiryIfAllGone(room);
+            return true;
+        };
+
+        for (const [_roomId, room] of rooms) {
+            if (markGone(room)) return;
+        }
+        // Not in the L1 cache (e.g. fresh process after a deploy where boot
+        // recovery hasn't run or the room was evicted): check Redis by the
+        // playerId this socket carried.
+        const pid = socket.data?.playerId || getPlayerId(socket);
+        if (pid && isRedisEnabled()) {
+            try {
+                for (const room of await listRooms()) {
+                    if (room.players.some(p => p.playerId === pid)) {
+                        rooms.set(room.roomId, room);
+                        markGone(room);
+                        break;
+                    }
+                }
+            } catch { /* ignore — disconnect bookkeeping is best-effort */ }
         }
     });
 });
