@@ -1,5 +1,5 @@
 import type { gameState } from "../../assets/start.ts";
-import type { Move } from "./simulation.ts";
+import type { AiAction, Move } from "./simulation.ts";
 import { legalMoves, cloneState, applyMove, evaluateState } from "./simulation.ts";
 
 // ============================================================================
@@ -14,7 +14,9 @@ export type HeuristicDifficulty = "easy" | "medium";
 // Pick the best move for `affiliation` under a heuristic.
 // - difficulty "easy": adds large random jitter (plays loosely, still legal)
 // - difficulty "medium": greedy best (1-ply)
-export function pickHeuristicMove(state: gameState, affiliation: "red" | "blue", difficulty: HeuristicDifficulty = "medium"): Move | null {
+// Returns an AiAction (always a "move") so callers can feed it straight
+// through the same pipeline as minimax results.
+export function pickHeuristicMove(state: gameState, affiliation: "red" | "blue", difficulty: HeuristicDifficulty = "medium"): AiAction | null {
     const moves = legalMoves(state, affiliation);
     if (moves.length === 0) return null;
 
@@ -38,5 +40,6 @@ export function pickHeuristicMove(state: gameState, affiliation: "red" | "blue",
         }
     }
 
-    return best;
+    if (!best) return null;
+    return { type: "move", from: best.from, to: best.to };
 }

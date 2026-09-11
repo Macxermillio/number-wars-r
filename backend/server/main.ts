@@ -17,6 +17,7 @@ import { cpus } from "os";
 import type { GameMode, Room, PlayerSlot } from "./protocol.ts";
 import { legalMoves } from "./ai/simulation.ts";
 import type { AiAction } from "./ai/simulation.ts";
+import { isWellFormedAiAction } from "./ai/simulation.ts";
 import { saveRoom, getRoom, deleteRoom, listRooms, touchRoom, isRedisEnabled } from "./redis.ts";
 
 // --- Computer-opponent worker pool (ARCHITECTURE §4) ---
@@ -597,13 +598,26 @@ async function triggerComputerMove(room: Room) {
         }
 
         // Feed the move through the exact same turn pipeline as a human move.
+        // Guard against malformed worker payloads (e.g. stale heuristic shape
+        // or missing coords) — never let a bad bot move crash the process.
         if (!move) return;
-        const result = move.type === "move"
-            ? processMoveIntent(room, computerSlot.playerId, move.from[0], move.from[1], move.to[0], move.to[1])
-            : processEffectIntent(room, computerSlot.playerId, move.type, move.target[0], move.target[1]);
-        if (result.error) {
+        if (!isWellFormedAiAction(move)) {
+            console.error(`[computer] malformed bot move: ${JSON.stringify(move)} — falling back to algorithmic random`);
+            move = null;
+        } else {
+            const result = move.type === "move"
+                ? processMoveIntent(room, computerSlot.playerId, move.from[0]!, move.from[1]!, move.to[0]!, move.to[1]!)
+                : processEffectIntent(room, computerSlot.playerId, move.type, move.target[0]!, move.target[1]!);
+            if (!result.error) {
+                runPostMoveStages(state);
+                io.to(room.roomId).emit("gameState", state);
+                persist(room);
+                return;
+            }
             // A worker move shouldn't be illegal, but if it is, fall back.
             console.error(`[computer] bot move rejected: ${result.error} — falling back to algorithmic random`);
+        }
+        {
             const moves = legalMoves(state, "red");
             const fb = moves.length > 0 ? moves[Math.floor(Math.random() * moves.length)]! : null;
             if (!fb) return;
@@ -616,11 +630,10 @@ async function triggerComputerMove(room: Room) {
                 console.error(`[computer] fallback ALSO rejected: ${result2.error} — leaving turn on red`);
                 return;
             }
+            runPostMoveStages(state);
+            io.to(room.roomId).emit("gameState", state);
+            persist(room);
         }
-
-        runPostMoveStages(state);
-        io.to(room.roomId).emit("gameState", state);
-        persist(room);
     } finally {
         // Only release the lock if we still own it — a re-triggering event may
         // have re-entered and started a fresh bot turn while we were awaiting.

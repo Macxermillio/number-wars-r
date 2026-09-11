@@ -24,6 +24,22 @@ export type AiAction =
     | { type: "move"; from: [number, number]; to: [number, number] }
     | { type: "split" | "weaken" | "strengthen"; target: [number, number] };
 
+// Runtime shape guard for bot/worker payloads. Malformed payloads (e.g. a
+// bare {from,to} without `type`, or missing coords) must never reach the
+// turn pipeline — they crashed triggerComputerMove with
+// "Cannot read properties of undefined (reading '0')".
+export function isWellFormedAiAction(action: unknown): action is AiAction {
+    if (typeof action !== "object" || action === null) return false;
+    const a = action as Record<string, unknown>;
+    if (a.type === "move") {
+        return Array.isArray(a.from) && Array.isArray(a.to);
+    }
+    if (a.type === "split" || a.type === "weaken" || a.type === "strengthen") {
+        return Array.isArray(a.target);
+    }
+    return false;
+}
+
 const dirsOrtho: [number, number][] = [[0, -1], [0, 1], [-1, 0], [1, 0]];
 const dirsDiag: [number, number][] = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
 
