@@ -17,7 +17,7 @@ import type { GameMode, Room, PlayerSlot } from "./protocol.ts";
 import { legalMoves } from "./ai/simulation.ts";
 import type { AiAction } from "./ai/simulation.ts";
 import { isWellFormedAiAction } from "./ai/simulation.ts";
-import { saveRoomJson, getRoom, deleteRoom, listRooms, touchRoom, isRedisEnabled } from "./redis.ts";
+import { saveRoomSnapshot, getRoom, deleteRoom, listRooms, touchRoom, isRedisEnabled } from "./redis.ts";
 
 // --- Computer-opponent worker pool (ARCHITECTURE §4) ---
 // Stateless workers: receive a gameState + difficulty, return a move.
@@ -105,7 +105,16 @@ async function fetchRoom(roomId: string): Promise<Room | null> {
     return null;
 }
 
-function persist(room: Room): Promise<void> {
+type MoveEvent = {
+    id: string;
+    sequence: number;
+    kind: "move" | "effect";
+    player: "blue" | "red";
+    turn: number;
+    recordedAt: number;
+};
+
+function persist(room: Room, event?: MoveEvent): Promise<void> {
     // Serialize immediately and write snapshots in order. Without this queue,
     // overlapping Redis writes can finish out of order and let an older full
     // game state overwrite the state from a later move.
@@ -113,12 +122,25 @@ function persist(room: Room): Promise<void> {
     const previous = roomSaveQueues.get(room.roomId) ?? Promise.resolve();
     const write = previous
         .catch(() => undefined)
-        .then(() => saveRoomJson(room.roomId, snapshot));
+        .then(() => saveRoomSnapshot(room.roomId, snapshot, event ? JSON.stringify(event) : undefined));
     roomSaveQueues.set(room.roomId, write);
     void write.finally(() => {
         if (roomSaveQueues.get(room.roomId) === write) roomSaveQueues.delete(room.roomId);
     });
     return write;
+}
+
+function persistAction(room: Room, kind: MoveEvent["kind"], player: "blue" | "red"): Promise<void> {
+    const sequence = (room.moveSequence ?? 0) + 1;
+    room.moveSequence = sequence;
+    return persist(room, {
+        id: randomUUID(),
+        sequence,
+        kind,
+        player,
+        turn: (room.state as gameState).turnCount,
+        recordedAt: Date.now(),
+    });
 }
 
 // --- Express app ---
@@ -486,7 +508,8 @@ async function triggerAiMove(room: Room) {
         // Bot moves are game activity too — keep the 1h idle deadline rolling.
         touchActivity(room);
         // Broadcast updated state
-        await persist(room);
+        if (appliedMove) await persistAction(room, "move", "red");
+        else await persist(room);
         io.to(room.roomId).emit("gameState", state);
     } finally {
         room.thinking = false;
@@ -571,7 +594,7 @@ async function triggerComputerMove(room: Room) {
             if (!result.error) {
                 runPostMoveStages(state);
                 touchActivity(room);
-                await persist(room);
+                await persistAction(room, move.type === "move" ? "move" : "effect", "red");
                 io.to(room.roomId).emit("gameState", state);
                 return;
             }
@@ -593,7 +616,7 @@ async function triggerComputerMove(room: Room) {
             }
             runPostMoveStages(state);
             touchActivity(room);
-            await persist(room);
+            await persistAction(room, "move", "red");
             io.to(room.roomId).emit("gameState", state);
         }
     } finally {
@@ -858,10 +881,11 @@ io.on("connection", (socket) => {
 
             // Any successful move counts as game activity — pushes the 1h idle deadline out.
             touchActivity(room);
-            // Persist the complete post-move snapshot before announcing it.
+            // Persist the complete post-move snapshot and immutable move event
+            // before announcing it.
             // This prevents a deploy immediately after the event from
             // restoring the pre-move board.
-            await persist(room);
+            await persistAction(room, "move", slot.affiliation);
             io.to(roomId).emit("gameState", state);
 
             // If playing against an automated opponent, trigger its move
@@ -922,7 +946,7 @@ io.on("connection", (socket) => {
             runPostMoveStages(state);
 
             touchActivity(room);
-            await persist(room);
+            await persistAction(room, "effect", slot.affiliation);
             io.to(roomId).emit("gameState", state);
 
             if ((room.mode === "ai" || room.mode === "computer") && !state.gameOver && state.turn === "red") {
