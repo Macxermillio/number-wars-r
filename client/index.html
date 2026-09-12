@@ -5,17 +5,31 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Number Wars</title>
     <script src="/config.js"></script>
-    <!-- Socket.IO client library — loaded from the BACKEND so the version
-         always matches the server (socket.io 4.8.3). config.js defines
-         NW_CONFIG.BACKEND_URL (Railway); on localhost the fallback below
-         resolves to the same origin. -->
+    <!-- Socket.IO client library (pinned to match server socket.io 4.8.x).
+         Primary: CDN. Fallback: backend-served copy at
+         <BACKEND_URL>/socket.io/socket.io.js (config.js defines
+         NW_CONFIG.BACKEND_URL on Vercel; same-origin otherwise).
+         NOTE: never use document.write here — it is blocked/deferred by
+         modern browsers and was causing "io is not defined". -->
     <script>
-        // Resolve the backend origin exactly like the connection code does.
-        var _backend = (window.NW_CONFIG && window.NW_CONFIG.BACKEND_URL)
-            ? window.NW_CONFIG.BACKEND_URL
-            : window.location.origin;
-        document.write('<script src="' + _backend + '/socket.io/socket.io.js"><\/script>');
+        function loadBackendSocketIo() {
+            var _backend = (window.NW_CONFIG && window.NW_CONFIG.BACKEND_URL)
+                ? window.NW_CONFIG.BACKEND_URL
+                : window.location.origin;
+            var s = document.createElement('script');
+            s.src = _backend + '/socket.io/socket.io.js';
+            s.async = false;
+            s.onerror = function () {
+                var t = document.getElementById('toast');
+                if (t) {
+                    t.textContent = 'Could not load the game server library. Check your connection and reload.';
+                    t.classList.add('show');
+                }
+            };
+            document.head.appendChild(s);
+        }
     </script>
+    <script src="https://cdn.socket.io/4.8.1/socket.io.min.js" onerror="loadBackendSocketIo()"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="" />
     <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&family=Quicksand:wght@500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Rubik:wght@500;600;700;800;900&display=swap" rel="stylesheet" />
@@ -1004,6 +1018,32 @@
         function connectSocket(pendingRoomId) {
             // Reuse the live socket when we already have one.
             if (socket && socket.connected) return socket;
+            // The Socket.IO client lib may still be loading (CDN slow/blocked)
+            // or may have failed entirely — never throw "io is not defined".
+            if (typeof io === 'undefined') {
+                showToast('Connecting to game server… (loading connection library)');
+                // Retry once the backend-served fallback copy finishes loading.
+                if (!connectSocket._retrying) {
+                    connectSocket._retrying = true;
+                    if (typeof loadBackendSocketIo === 'function') loadBackendSocketIo();
+                    var tries = 0;
+                    var wait = setInterval(function () {
+                        tries += 1;
+                        if (typeof io !== 'undefined') {
+                            clearInterval(wait);
+                            connectSocket._retrying = false;
+                            connectSocket(pendingRoomId);
+                            // Replay the pending action now that io exists.
+                            if (pendingJoin && pendingJoin.roomId) emitJoin(pendingJoin.roomId);
+                        } else if (tries >= 50) { // ~10s
+                            clearInterval(wait);
+                            connectSocket._retrying = false;
+                            showToast('Could not reach the game server. Check your connection and reload.');
+                        }
+                    }, 200);
+                }
+                return null;
+            }
             const stored = pendingRoomId ? loadSeat(pendingRoomId) : null;
             if (stored && stored.playerId) {
                 // The seat for THIS room wins over any id from another room.
@@ -1192,7 +1232,11 @@
 
         // ============ Create / Join Room ============
         function createRoom(mode) {
-            connectSocket(null);
+            const s = connectSocket(null);
+            // connectSocket returns null while the Socket.IO lib is still
+            // loading — stay on the landing screen; the retry loop inside
+            // connectSocket replays the connection once `io` exists.
+            if (!s) return;
             // Wait for the socket handshake before emitting (page-load race).
             const payload = { mode };
             if (mode === 'computer') {
@@ -1211,7 +1255,10 @@
             roomId = code;
             gameState = null;
             pendingJoin = { roomId: code, playerId: (loadSeat(code) || {}).playerId || myPlayerId };
-            connectSocket(code);
+            const s = connectSocket(code);
+            // Same guard as createRoom: if `io` isn't loaded yet, the retry
+            // loop replays the join once it is — don't hide the landing page.
+            if (!s) return;
             emitJoin(code);
             showLanding(false);
         }
