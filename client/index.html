@@ -1661,6 +1661,16 @@
                 const clone = finalEl.cloneNode(true);
                 clone.classList.add('movement-clone');
                 finalEl.classList.add('movement-arrival-hidden');
+                // A shard is consumed in the authoritative state as soon as
+                // the move is accepted, so the re-render above normally
+                // removes it before the moving piece reaches the square.
+                // Keep a visual copy on the destination for the duration of
+                // the flight so the pickup reads as happening on arrival.
+                const previousDestination = previous.board[`${finalPiece.col},${finalPiece.row}`];
+                const nextDestination = next.board[`${finalPiece.col},${finalPiece.row}`];
+                const pickedShard = previousDestination?.shard;
+                const preserveShard = pickedShard && !nextDestination?.shard;
+                if (preserveShard) destinationCell.classList.add(`shard-${pickedShard}`);
                 clone.style.width = `${destinationCell.clientWidth}px`;
                 clone.style.height = `${destinationCell.clientHeight}px`;
                 clone.style.left = `${destinationCell.offsetLeft}px`;
@@ -1684,6 +1694,7 @@
                     tweenTransform(clone, startX, startY, 0, 0, duration).then(() => {
                         clone.remove();
                         finalEl.classList.remove('movement-arrival-hidden');
+                        if (preserveShard) destinationCell.classList.remove(`shard-${pickedShard}`);
                     })
                 );
             }
