@@ -1,7 +1,7 @@
 // Number Wars — Redis persistence layer
 // Single-replica now, multi-replica ready later.
 //
-// - Rooms are JSON-serialized to `room:{roomId}` with a 15-min TTL (matches DISCONNECT_TIMEOUT_MS).
+// - Rooms are JSON-serialized to `room:{roomId}` with a 1h TTL (covers IDLE_TIMEOUT_MS).
 // - The in-memory `rooms` Map in main.ts stays as an L1 cache; every mutation
 //   must call `saveRoom()` (write-through) and every read should go through
 //   `fetchRoom()` (cache-aside fallback to Redis).
@@ -13,7 +13,7 @@
 import Redis from "ioredis";
 import type { Room } from "./protocol.ts";
 
-export const ROOM_TTL_SECONDS = 15 * 60; // 15 min — must match DISCONNECT_TIMEOUT_MS
+export const ROOM_TTL_SECONDS = 60 * 60; // 1h — must cover IDLE_TIMEOUT_MS (disconnect expiry is 15 min, idle expiry is 1h)
 const roomKey = (roomId: string) => `room:${roomId}`;
 const lockKey = (roomId: string) => `room:${roomId}:botlock`;
 

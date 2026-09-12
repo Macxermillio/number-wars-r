@@ -50,6 +50,7 @@ export interface Room {
     createdAt: number;
     thinking: boolean; // true while AI/computer is computing a move
     difficulty?: "easy" | "medium" | "hard" | "insane"; // computer mode only
+    lastActivityAt?: number; // ms epoch of last game action (move/effect/join/rematch); drives 1h idle expiry
 }
 
 // Client events (from ARCHITECTURE §11)

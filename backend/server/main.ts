@@ -8,9 +8,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 
 import startGame, { type gameState } from "../assets/start.ts";
-import { move, validateMove } from "../assets/pieces.ts";
-import { mergeEffect, splitEffect, weakenEffect, strengthenPiece } from "../assets/effects.ts";
 import { brickBoard, chooseTurnEffect, spawnShards, spawnStar, checkStarWin } from "../assets/mechanics.ts";
+import { processMoveIntent, processEffectIntent } from "./intents.ts";
 import { getAiMove, legalRandomMove } from "./ai/llm.ts";
 import { Worker } from "worker_threads";
 import { cpus } from "os";
@@ -71,12 +70,14 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // --- Config ---
 const PORT = parseInt(process.env.PORT || "3000", 10);
-const DISCONNECT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes (room expiry)
+const DISCONNECT_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes (room expiry when all humans gone)
+const IDLE_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour (room expiry when no game action happens)
 const OPPONENT_NOTICE_DELAY_MS = 30 * 1000; // 30s grace before telling opponent
 
 // --- In-memory state (L1 cache; Redis is durable L2) ---
 const rooms = new Map<string, Room>();
 const roomTimers = new Map<string, NodeJS.Timeout>();
+const idleTimers = new Map<string, NodeJS.Timeout>();
 const disconnectNotices = new Map<string, NodeJS.Timeout>();
 const roomSaveQueues = new Map<string, Promise<void>>();
 
@@ -89,8 +90,16 @@ async function fetchRoom(roomId: string): Promise<Room | null> {
     }
     const persisted = await getRoom(roomId);
     if (persisted) {
+        // Post-restart recovery: drop rooms that already sat idle past the
+        // 1h deadline while we were down; otherwise resume their idle timer.
+        const stamp = persisted.lastActivityAt ?? persisted.createdAt ?? 0;
+        if (Date.now() - stamp >= IDLE_TIMEOUT_MS) {
+            void deleteRoom(roomId);
+            return null;
+        }
         rooms.set(roomId, persisted);
         void touchRoom(roomId);
+        scheduleIdleExpiry(persisted);
         return persisted;
     }
     return null;
@@ -188,6 +197,57 @@ function cancelRoomExpiry(roomId: string) {
     }
 }
 
+function cancelIdleExpiry(roomId: string) {
+    const timer = idleTimers.get(roomId);
+    if (timer) {
+        clearTimeout(timer);
+        idleTimers.delete(roomId);
+    }
+}
+
+function destroyRoom(roomId: string, reason: "disconnect" | "idle") {
+    cancelRoomExpiry(roomId);
+    cancelIdleExpiry(roomId);
+    rooms.delete(roomId);
+    void deleteRoom(roomId);
+    const msg = reason === "idle"
+        ? "Room closed after 1 hour of inactivity"
+        : "Room expired due to inactivity";
+    io.to(roomId).emit("error", msg);
+    console.log(`[room] ${roomId} destroyed (${reason})`);
+}
+
+// Idle shutdown: any game action (move/effect/join/rematch/create) refreshes
+// lastActivityAt and pushes the 1h deadline out. Fires even while players
+// are still connected — it measures game activity, not connection state.
+function scheduleIdleExpiry(room: Room) {
+    cancelIdleExpiry(room.roomId);
+    const last = room.lastActivityAt ?? room.createdAt ?? Date.now();
+    const remaining = last + IDLE_TIMEOUT_MS - Date.now();
+    if (remaining <= 0) {
+        destroyRoom(room.roomId, "idle");
+        return;
+    }
+    const timer = setTimeout(() => {
+        idleTimers.delete(room.roomId);
+        // Re-check against live state: activity may have happened without
+        // rescheduling (e.g. write raced the timer).
+        const live = rooms.get(room.roomId);
+        const stamp = live?.lastActivityAt ?? room.lastActivityAt ?? room.createdAt ?? 0;
+        if (Date.now() - stamp < IDLE_TIMEOUT_MS) {
+            if (live) scheduleIdleExpiry(live);
+            return;
+        }
+        destroyRoom(room.roomId, "idle");
+    }, remaining);
+    idleTimers.set(room.roomId, timer);
+}
+
+function touchActivity(room: Room) {
+    room.lastActivityAt = Date.now();
+    scheduleIdleExpiry(room);
+}
+
 function cancelDisconnectNotice(roomId: string, playerId: string) {
     const key = `${roomId}:${playerId}`;
     const timer = disconnectNotices.get(key);
@@ -208,11 +268,7 @@ function scheduleRoomExpiryIfAllGone(room: Room) {
     }
     if (roomTimers.has(room.roomId)) return;
     const timer = setTimeout(() => {
-        rooms.delete(room.roomId);
-        roomTimers.delete(room.roomId);
-        void deleteRoom(room.roomId);
-        io.to(room.roomId).emit("error", "Room expired due to inactivity");
-        console.log(`[room] ${room.roomId} destroyed (timeout)`);
+        destroyRoom(room.roomId, "disconnect");
     }, DISCONNECT_TIMEOUT_MS);
     roomTimers.set(room.roomId, timer);
 }
@@ -287,144 +343,10 @@ function setPlayerIdCookie(res: any, playerId: string) {
     // client-side or via express response
 }
 
-// Find a piece by position on the board
-function findPieceByPosition(state: gameState, col: number, row: number, affiliation: string): any | null {
-    const pieces = affiliation === "red" ? state.redPieces : state.bluePieces;
-    return pieces.find(p => p.position[0] === col && p.position[1] === row) || null;
-}
-
 // ==================== The turn pipeline ====================
-
-function processMoveIntent(room: Room, playerId: string, fromCol: number, fromRow: number, toCol: number, toRow: number): { error?: string; result?: string } {
-    const state = room.state as gameState;
-    const slot = room.players.find(p => p.playerId === playerId);
-    if (!slot) return { error: "Player not in room" };
-
-    // `move()` also validates turn ownership through game history, but the
-    // authoritative source is the state turn. This must happen before any
-    // piece lookup or mutation so stale async AI/computer requests cannot be
-    // applied after the turn has changed.
-    if (state.turn !== slot.affiliation) {
-        return { error: "It's not your turn." };
-    }
-
-    const piece = findPieceByPosition(state, fromCol, fromRow, slot.affiliation);
-    if (!piece) return { error: "No piece found at that position" };
-
-    const destination: [number, number] = [toCol, toRow];
-
-    // Check if destination has an ally piece AND current turn effect is Merge
-    const targetSquare = state.board[`${toCol},${toRow}`];
-    if (targetSquare?.tenant && targetSquare.tenant.affiliation === slot.affiliation) {
-        if (state.turnEffect !== "Merge") {
-            return { error: "Cannot land on an ally piece — only allowed on Merge turns" };
-        }
-        // Merge turn: call mergeEffect
-        const result = mergeEffect(piece, targetSquare.tenant, state.board, state);
-        if (typeof result === "string" && result !== "Pieces merged") {
-            return { error: result };
-        }
-        // mergeEffect mutates the pieces but does not record the action or
-        // advance the turn. Record it before flipping turns so the legacy
-        // move validator's history remains synchronized with state.turn.
-        state.gameHistory.push({
-            turn: state.turnCount,
-            event: `${slot.affiliation === "blue" ? "Blue" : "Red"} ${piece.strength} from ${fromCol},${fromRow} merged with ${slot.affiliation === "blue" ? "Blue" : "Red"} ${targetSquare.tenant.strength} at ${toCol},${toRow} (merged)`,
-            player: slot.affiliation,
-        });
-        // Effects don't advance turn — do it here
-        state.turnCount += 1;
-        state.turn = state.turn === "blue" ? "red" : "blue";
-        state.turnEffect = chooseTurnEffect();
-        return { result: "merge" };
-    }
-
-    // Normal move/capture — use existing move() function
-    // move() handles validation, capture, shards, turn advancement, history
-    const turnCountBeforeMove = state.turnCount;
-    const result = move(destination, piece, state) ?? "Unknown move error";
-    if (result !== "Piece moved successfully" && result !== "Piece captured" && result !== "Piece died to spikes" && result !== "Piece repelled" && result !== "Piece bounced off armor") {
-        return { error: result };
-    }
-
-    // `move()` advances the turn for an empty-square move, but the capture()
-    // branches return early for combat outcomes. Those are still complete
-    // moves and must consume exactly one turn as well.
-    if (state.turnCount === turnCountBeforeMove) {
-        state.turnCount += 1;
-        state.turn = piece.affiliation === "red" ? "blue" : "red";
-    }
-
-    // move() already advanced the turn. Now roll the next turn effect.
-    state.turnEffect = chooseTurnEffect();
-
-    return { result };
-}
-
-function processEffectIntent(room: Room, playerId: string, effect: string, targetCol: number, targetRow: number): { error?: string; result?: string } {
-    const state = room.state as gameState;
-    const slot = room.players.find(p => p.playerId === playerId);
-    if (!slot) return { error: "Player not in room" };
-
-    // Effects consume the current turn too. Keep this authoritative check at
-    // the shared intent boundary so an effect cannot be applied after a
-    // delayed/stale client request.
-    if (state.turn !== slot.affiliation) {
-        return { error: "It's not your turn." };
-    }
-
-    // Find target piece (ally or enemy — effects are affiliation-agnostic except Split)
-    const redTarget = state.redPieces.find(p => p.position[0] === targetCol && p.position[1] === targetRow);
-    const blueTarget = state.bluePieces.find(p => p.position[0] === targetCol && p.position[1] === targetRow);
-    const target = redTarget || blueTarget;
-    if (!target) return { error: "No piece found at target position" };
-
-    let result: string | undefined;
-
-    switch (effect) {
-        case "split": {
-            // Split requires your own piece
-            if (target.affiliation !== slot.affiliation) return { error: "Can only split your own piece" };
-            result = splitEffect(target, state.board, state);
-            break;
-        }
-        case "weaken": {
-            result = weakenEffect(target, state);
-            break;
-        }
-        case "strengthen": {
-            result = strengthenPiece(target, state);
-            break;
-        }
-        default:
-            return { error: `Unknown effect: ${effect}` };
-    }
-
-    const effectSucceeded = result === "Piece weakened" ||
-        result === "Piece strengthened" ||
-        result?.startsWith("Piece created") === true;
-    if (!effectSucceeded) {
-        return { error: result || "Effect failed" };
-    }
-
-    // Effects don't advance the turn — do it here
-    const side = slot.affiliation === "blue" ? "Blue" : "Red";
-    const detail = effect === "split"
-        ? `${side} ${target.strength} split at ${targetCol},${targetRow}`
-        : effect === "weaken"
-            ? `${side} weakened ${target.affiliation === "blue" ? "Blue" : "Red"} ${target.strength} at ${targetCol},${targetRow} (-1 str/armor/range)`
-            : `${side} strengthened ${target.affiliation === "blue" ? "Blue" : "Red"} ${target.strength} at ${targetCol},${targetRow} (doubled strength, paid armor)`;
-    state.gameHistory.push({
-        turn: state.turnCount,
-        event: `Effect used: ${effect} — ${detail}`,
-        player: slot.affiliation,
-    });
-    state.turnCount += 1;
-    state.turn = state.turn === "blue" ? "red" : "blue";
-    state.turnEffect = chooseTurnEffect();
-
-    return { result: "effect" };
-}
+// processMoveIntent / processEffectIntent live in ./intents.ts (side-effect
+// free) so unit tests can import them without booting the HTTP/Socket.IO
+// server. main.ts re-exports them through the import above.
 
 function runPostMoveStages(state: gameState) {
     // Stage 3: bricking
@@ -561,6 +483,8 @@ async function triggerAiMove(room: Room) {
         // Run post-move stages
         runPostMoveStages(state);
 
+        // Bot moves are game activity too — keep the 1h idle deadline rolling.
+        touchActivity(room);
         // Broadcast updated state
         await persist(room);
         io.to(room.roomId).emit("gameState", state);
@@ -646,6 +570,7 @@ async function triggerComputerMove(room: Room) {
                 : processEffectIntent(room, computerSlot.playerId, move.type, move.target[0]!, move.target[1]!);
             if (!result.error) {
                 runPostMoveStages(state);
+                touchActivity(room);
                 await persist(room);
                 io.to(room.roomId).emit("gameState", state);
                 return;
@@ -667,6 +592,7 @@ async function triggerComputerMove(room: Room) {
                 return;
             }
             runPostMoveStages(state);
+            touchActivity(room);
             await persist(room);
             io.to(room.roomId).emit("gameState", state);
         }
@@ -709,6 +635,7 @@ io.on("connection", (socket) => {
                 mode,
                 host: playerId,
                 createdAt: Date.now(),
+                lastActivityAt: Date.now(),
                 thinking: false,
             };
 
@@ -733,6 +660,7 @@ io.on("connection", (socket) => {
             }
 
             rooms.set(roomId, room);
+            touchActivity(room);
             persist(room);
             socket.join(roomId);
 
@@ -772,6 +700,7 @@ io.on("connection", (socket) => {
 
             const reattach = (slot: PlayerSlot, isNewSeat: boolean) => {
                 attachSocketToSlot(room, slot, socket);
+                if (isNewSeat) touchActivity(room);
                 persist(room);
                 socket.emit("gameState", room.state);
                 socket.emit("roomJoined", {
@@ -842,6 +771,7 @@ io.on("connection", (socket) => {
                 connected: true,
             };
             room.players.push(newSlot);
+            touchActivity(room);
             persist(room);
             socket.data.playerId = newPlayerId;
             socket.join(roomId);
@@ -926,6 +856,8 @@ io.on("connection", (socket) => {
             runPostMoveStages(state);
             console.log(`[d] move applied by ${slot.affiliation}; now turn=${state.turn}, history last=${state.gameHistory[state.gameHistory.length-1]?.player}`);
 
+            // Any successful move counts as game activity — pushes the 1h idle deadline out.
+            touchActivity(room);
             // Persist the complete post-move snapshot before announcing it.
             // This prevents a deploy immediately after the event from
             // restoring the pre-move board.
@@ -989,6 +921,7 @@ io.on("connection", (socket) => {
 
             runPostMoveStages(state);
 
+            touchActivity(room);
             await persist(room);
             io.to(roomId).emit("gameState", state);
 
@@ -1032,6 +965,7 @@ io.on("connection", (socket) => {
             room.state = fresh as unknown as typeof room.state;
             room.thinking = false;
             cancelRoomExpiry(roomId);
+            touchActivity(room);
             persist(room);
             console.log(`[room] ${roomId} rematch started by ${playerId}`);
             io.to(roomId).emit("gameState", room.state);
@@ -1120,26 +1054,33 @@ httpServer.listen(PORT, async () => {
 
     // Boot recovery: reload rooms persisted before a restart/redeploy so
     // live games survive. Bot turns interrupted mid-thinking are resumed.
+    // Rooms that sat idle past the 1h deadline while we were down are dropped.
     if (isRedisEnabled()) {
         try {
             const persisted = await listRooms();
+            let recovered = 0;
             for (const room of persisted) {
+                const stamp = room.lastActivityAt ?? room.createdAt ?? 0;
+                if (Date.now() - stamp >= IDLE_TIMEOUT_MS) {
+                    void deleteRoom(room.roomId);
+                    continue;
+                }
                 rooms.set(room.roomId, room);
-            }
-            if (persisted.length > 0) {
-                console.log(`[redis] recovered ${persisted.length} room(s) from persistence`);
-                for (const room of persisted) {
-                    const state = room.state as gameState;
-                    if (!state.gameOver && state.turn === "red" && !room.thinking) {
-                        if (room.mode === "ai") {
-                            console.log(`[redis] resuming AI turn in ${room.roomId}`);
-                            void triggerAiMove(room);
-                        } else if (room.mode === "computer") {
-                            console.log(`[redis] resuming computer turn in ${room.roomId}`);
-                            void triggerComputerMove(room);
-                        }
+                scheduleIdleExpiry(room);
+                recovered++;
+                const state = room.state as gameState;
+                if (!state.gameOver && state.turn === "red" && !room.thinking) {
+                    if (room.mode === "ai") {
+                        console.log(`[redis] resuming AI turn in ${room.roomId}`);
+                        void triggerAiMove(room);
+                    } else if (room.mode === "computer") {
+                        console.log(`[redis] resuming computer turn in ${room.roomId}`);
+                        void triggerComputerMove(room);
                     }
                 }
+            }
+            if (recovered > 0) {
+                console.log(`[redis] recovered ${recovered} room(s) from persistence`);
             }
         } catch (err: any) {
             console.error("[redis] boot recovery failed:", err.message);
