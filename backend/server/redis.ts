@@ -15,6 +15,7 @@ import type { Room } from "./protocol.ts";
 
 export const ROOM_TTL_SECONDS = 60 * 60; // 1h — must cover IDLE_TIMEOUT_MS (disconnect expiry is 15 min, idle expiry is 1h)
 const roomKey = (roomId: string) => `room:${roomId}`;
+const roomEventsKey = (roomId: string) => `room:${roomId}:events`;
 const lockKey = (roomId: string) => `room:${roomId}:botlock`;
 
 let redis: Redis | null = null;
@@ -56,6 +57,20 @@ export async function saveRoomJson(roomId: string, serializedRoom: string): Prom
     }
 }
 
+/** Persist the complete snapshot and optional immutable move event atomically. */
+export async function saveRoomSnapshot(roomId: string, serializedRoom: string, event?: string): Promise<void> {
+    if (!redis) return;
+    const transaction = redis.multi().setex(roomKey(roomId), ROOM_TTL_SECONDS, serializedRoom);
+    if (event) {
+        transaction.rpush(roomEventsKey(roomId), event);
+        transaction.expire(roomEventsKey(roomId), ROOM_TTL_SECONDS);
+    }
+    const results = await transaction.exec();
+    if (!results || results.some((result: [Error | null, unknown]) => result[0])) {
+        throw new Error(`Redis transaction failed for room ${roomId}`);
+    }
+}
+
 /** Refresh TTL without rewriting (cheap keep-alive on reads). */
 export async function touchRoom(roomId: string): Promise<void> {
     if (!redis) return;
@@ -79,7 +94,7 @@ export async function getRoom(roomId: string): Promise<Room | null> {
 export async function deleteRoom(roomId: string): Promise<void> {
     if (!redis) return;
     try {
-        await redis.del(roomKey(roomId), lockKey(roomId));
+        await redis.del(roomKey(roomId), roomEventsKey(roomId), lockKey(roomId));
     } catch (err: any) {
         console.error(`[redis] deleteRoom ${roomId} failed:`, err.message);
     }
@@ -95,7 +110,7 @@ export async function listRooms(): Promise<Room[]> {
             const [next, batch] = await redis.scan(cursor, "MATCH", "room:*", "COUNT", 100);
             cursor = next;
             // Exclude bot-lock keys
-            for (const k of batch) if (!k.endsWith(":botlock")) keys.push(k);
+            for (const k of batch) if (!k.endsWith(":botlock") && !k.endsWith(":events")) keys.push(k);
         } while (cursor !== "0");
         if (keys.length === 0) return [];
         const raws = await redis.mget(...keys);
