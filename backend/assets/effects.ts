@@ -5,7 +5,7 @@ import type { gameState } from "./start"
 
 
 
-function createPiece(piece: Piece, game: gameState){
+function findSplitPosition(piece: Piece, game: gameState): [number, number] | null {
     const board = game.board
     const position = piece.position
     const column = position[0]
@@ -22,47 +22,43 @@ function createPiece(piece: Piece, game: gameState){
 
     const possiblePositions: [number, number][] = [north, south, west, east, northWest, northEast, southWest, southEast]
 
-    for (let pos of possiblePositions) {
+    for (const pos of possiblePositions) {
         const key = `${pos[0]},${pos[1]}`
-        // skip positions that don't exist on the board
-        if (!(key in board)) {
-            continue
-        }
-        // don't spawn on a bricked square
-        if (checkBricked(pos, board)) {
-            continue
-        }
-        // don't spawn on top of a shard or an occupied square (ally/enemy)
-        if (checkOccupation(pos, board)) {
-            continue
-        }
+        if (!(key in board)) continue
+        if (checkBricked(pos, board)) continue
+        // Stars and shards are pickups for movement, not free split squares.
+        if (checkOccupation(pos, board)) continue
+        return pos
+    }
+    return null
+}
 
-        const newPiece: Piece = {
-            strength: piece.strength,
-            armor: piece.armor,
-            spike: 0,
-            range: Math.max(1, piece.range),
-            position: [pos[0], pos[1]],
-            affiliation: piece.affiliation,
-        }
-        board[key] = {
-            occupied: true,
-            bricked: false,
-            tenant: newPiece
-        }
-
-        if (newPiece.affiliation === "blue"){
-            game.bluePieces.push(newPiece)
-        }
-
-        if(newPiece.affiliation === "red"){
-            game.redPieces.push(newPiece)
-        }
-
-        return "Piece created"
+function createPiece(piece: Piece, game: gameState, pos: [number, number]){
+    const board = game.board
+    const key = `${pos[0]},${pos[1]}`
+    const newPiece: Piece = {
+        strength: piece.strength,
+        armor: piece.armor,
+        spike: 0,
+        range: Math.max(1, piece.range),
+        position: [pos[0], pos[1]],
+        affiliation: piece.affiliation,
+    }
+    board[key] = {
+        occupied: true,
+        bricked: false,
+        tenant: newPiece
     }
 
-    return "No valid position to create piece"
+    if (newPiece.affiliation === "blue"){
+        game.bluePieces.push(newPiece)
+    }
+
+    if(newPiece.affiliation === "red"){
+        game.redPieces.push(newPiece)
+    }
+
+    return "Piece created"
 }
 
 function deletePiece(board: Board, piece: Piece, game: gameState){
@@ -170,43 +166,26 @@ export function splitEffect(piece: Piece, board: Board, game: gameState){
         return "Can't split piece, that is not yours"
     }
 
+    if (![2, 4, 6, 8].includes(piece.strength)) {
+        return "Piece cannot be split"
+    }
+
+    // Validate placement before changing any stats. A failed effect must be
+    // atomic: no new piece, no halved original, and no consumed turn.
+    const splitPosition = findSplitPosition(piece, game)
+    if (!splitPosition) {
+        return "No valid position to create piece"
+    }
+
     // Splitting halves the range, but a piece must always retain at least
     // one square of movement.
     const splitRange = Math.max(1, Math.floor(piece.range / 2))
 
-    switch(piece.strength) {
-        case 2:
-            piece.strength =  1
-            piece.armor = Math.floor(piece.armor / 2)
-            piece.range = splitRange
-            piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
-            if (createPiece(piece, game) === "Piece created") return "Piece created"
-            break;
-        case 4:
-            piece.strength =  2
-            piece.armor = Math.floor(piece.armor / 2)
-            piece.range = splitRange
-            piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
-            if (createPiece(piece, game) === "Piece created") return "Piece created"
-            break;
-        case 6:
-            piece.strength =  3
-            piece.armor = Math.floor(piece.armor / 2)
-            piece.range = splitRange
-            piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
-            if (createPiece(piece, game) === "Piece created") return "Piece created"
-            break;
-        case 8:
-            piece.strength =  4
-            piece.armor = Math.floor(piece.armor / 2)
-            piece.range = splitRange
-            piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
-                if (createPiece(piece, game) === "Piece created") return "Piece created"
-            break;
-
-         default:
-            return "Piece cannot be split"
-    }
+    piece.strength /= 2
+    piece.armor = Math.floor(piece.armor / 2)
+    piece.range = splitRange
+    piece.spike = piece.spike ? Math.floor(piece.spike / 2) : 0
+    return createPiece(piece, game, splitPosition)
 }
 
 export function weakenEffect(piece: Piece, game: gameState){
@@ -303,6 +282,10 @@ export function checkOccupation(destination: [number, number], board: Board): bo
     }
 
     if(targetSquare.shard){
+        return true
+    }
+
+    if(targetSquare.star){
         return true
     }
 

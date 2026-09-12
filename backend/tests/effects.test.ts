@@ -142,9 +142,25 @@ describe("splitEffect()", () => {
 
         const result = splitEffect(piece, board, game);
 
-        // No new piece created, and the original was never added to the array.
+        // No new piece created, and the failed effect is completely atomic.
         expect(game.bluePieces.length).toBe(0);
-        expect(result).toBeUndefined();
+        expect(result).toBe("No valid position to create piece");
+        expect(piece).toMatchObject({ strength: 2, armor: 4, range: 2 });
+    });
+
+    it("does not overwrite a star when choosing a split square", () => {
+        const board = createGridBoard(3, 3);
+        const game = makeGame({ board });
+        const piece = makePiece({ position: [1, 1], strength: 2, armor: 4, range: 2 });
+        placePiece(board, piece);
+        board["1,0"]!.star = true; // first candidate (north)
+
+        const result = splitEffect(piece, board, game);
+
+        expect(result).toBe("Piece created");
+        expect(board["1,0"]!.star).toBe(true);
+        expect(board["1,0"]!.tenant).toBeNull();
+        expect(board["1,2"]!.tenant).not.toBeNull(); // next candidate (south)
     });
 });
 

@@ -494,6 +494,7 @@ async function triggerAiMove(room: Room) {
                     console.error(`[AI] Fallback move ALSO rejected: ${result.error} — giving up this AI turn`);
                 } else {
                     console.log(`[d] AI fallback move accepted; result=${result.result}; now turn=${state.turn}`);
+                    appliedMove = true;
                 }
             } else {
                 // Literally no legal move exists (all pieces pinned). Leave the
@@ -501,6 +502,8 @@ async function triggerAiMove(room: Room) {
                 console.error("[AI] No legal move exists at all — leaving turn on red");
             }
         }
+
+        if (!appliedMove) return;
 
         // Run post-move stages
         runPostMoveStages(state);
@@ -1093,11 +1096,15 @@ httpServer.listen(PORT, async () => {
                 scheduleIdleExpiry(room);
                 recovered++;
                 const state = room.state as gameState;
-                if (!state.gameOver && state.turn === "red" && !room.thinking) {
+                if (!state.gameOver && state.turn === "red" && (room.mode === "ai" || room.mode === "computer")) {
+                    // A process can die after persisting thinking=true but
+                    // before its in-flight bot request completes. No request
+                    // survives a restart, so every recovered flag is stale.
+                    room.thinking = false;
                     if (room.mode === "ai") {
                         console.log(`[redis] resuming AI turn in ${room.roomId}`);
                         void triggerAiMove(room);
-                    } else if (room.mode === "computer") {
+                    } else {
                         console.log(`[redis] resuming computer turn in ${room.roomId}`);
                         void triggerComputerMove(room);
                     }

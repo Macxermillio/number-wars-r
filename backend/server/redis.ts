@@ -11,6 +11,7 @@
 //   add variable REDIS_URL = ${{Redis.REDIS_URL}} (private `redis.railway.internal` URL).
 // - Local: docker run -d -p 6379:6379 redis:7-alpine + REDIS_URL=redis://localhost:6379
 import Redis from "ioredis";
+import type { gameState } from "../assets/start.ts";
 import type { Room } from "./protocol.ts";
 
 export const ROOM_TTL_SECONDS = 60 * 60; // 1h — must cover IDLE_TIMEOUT_MS (disconnect expiry is 15 min, idle expiry is 1h)
@@ -40,6 +41,29 @@ export function isRedisEnabled(): boolean {
 
 export function getRedis(): Redis | null {
     return redis;
+}
+
+// JSON serialization duplicates each piece: one object in the affiliation
+// array and another in board[*].tenant. The engine relies on those references
+// being identical, so restore that invariant whenever a room leaves Redis.
+export function rehydrateRoom(room: Room): Room {
+    const state = room.state as gameState;
+    if (!state?.board || !Array.isArray(state.redPieces) || !Array.isArray(state.bluePieces)) {
+        return room;
+    }
+
+    for (const square of Object.values(state.board)) {
+        square.tenant = null;
+        square.occupied = false;
+    }
+    for (const piece of [...state.redPieces, ...state.bluePieces]) {
+        const square = state.board[`${piece.position[0]},${piece.position[1]}`];
+        if (!square) continue;
+        square.tenant = piece;
+        square.occupied = true;
+        square.bricked = false;
+    }
+    return room;
 }
 
 export async function saveRoom(room: Room): Promise<void> {
@@ -84,7 +108,7 @@ export async function getRoom(roomId: string): Promise<Room | null> {
     try {
         const raw = await redis.get(roomKey(roomId));
         if (!raw) return null;
-        return JSON.parse(raw) as Room;
+        return rehydrateRoom(JSON.parse(raw) as Room);
     } catch (err: any) {
         console.error(`[redis] getRoom ${roomId} failed:`, err.message);
         return null;
@@ -117,7 +141,7 @@ export async function listRooms(): Promise<Room[]> {
         const rooms: Room[] = [];
         for (const raw of raws) {
             if (!raw) continue;
-            try { rooms.push(JSON.parse(raw) as Room); } catch { /* skip corrupt */ }
+            try { rooms.push(rehydrateRoom(JSON.parse(raw) as Room)); } catch { /* skip corrupt */ }
         }
         return rooms;
     } catch (err: any) {

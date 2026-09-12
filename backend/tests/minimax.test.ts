@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isMeaningfulSplit, pickMinimaxMove } from "../server/ai/minimax";
 import { pickHeuristicMove } from "../server/ai/heuristic";
-import { applyAction, applyMove, cloneState, isWellFormedAiAction } from "../server/ai/simulation";
+import { applyAction, applyMove, cloneState, isWellFormedAiAction, legalMoves } from "../server/ai/simulation";
 import { createGameBoard, makeGame, makePiece, placePiece } from "./helpers";
 
 describe("Insane split action selection", () => {
@@ -96,5 +96,55 @@ describe("Computer bot payload regression (Railway crash)", () => {
         expect(isWellFormedAiAction({ type: "weaken", target: undefined })).toBe(false);
         expect(isWellFormedAiAction({ type: "move", from: [28, 7] })).toBe(false);
         expect(isWellFormedAiAction(null)).toBe(false);
+    });
+
+    it("never offers the computer a move through a brick", () => {
+        const board = createGameBoard();
+        const game = makeGame({ board, turn: "red", turnEffect: "Merge" });
+        const red = makePiece({ affiliation: "red", position: [28, 7], strength: 4, armor: 6, range: 4 });
+        placePiece(board, red);
+        board["28,6"]!.bricked = true;
+        game.redPieces.push(red);
+
+        const moves = legalMoves(game, "red");
+        expect(moves).not.toContainEqual({ from: [28, 7], to: [28, 5] });
+        expect(moves).not.toContainEqual({ from: [28, 7], to: [28, 4] });
+    });
+
+    it("advances simulated turn state after a capture", () => {
+        const board = createGameBoard();
+        const attacker = makePiece({ affiliation: "red", position: [28, 7], strength: 4, armor: 6, range: 4 });
+        const defender = makePiece({ affiliation: "blue", position: [28, 6], strength: 1, armor: 1, range: 1 });
+        placePiece(board, attacker);
+        placePiece(board, defender);
+        const game = makeGame({
+            board,
+            turn: "red",
+            turnCount: 20,
+            turnEffect: "Weaken",
+            redPieces: [attacker],
+            bluePieces: [defender],
+        });
+
+        const result = applyMove(game, { from: [28, 7], to: [28, 6] });
+
+        expect(result.error).toBeUndefined();
+        expect(game.turn).toBe("blue");
+        expect(game.turnCount).toBe(21);
+        expect(game.turnEffect).toBe("Merge");
+    });
+
+    it("does not simulate a split onto a star", () => {
+        const board = createGameBoard();
+        const red = makePiece({ affiliation: "red", position: [28, 7], strength: 2, armor: 8, range: 2 });
+        placePiece(board, red);
+        board["27,6"]!.star = true; // first simulated adjacency candidate
+        const game = makeGame({ board, turn: "red", turnEffect: "Split", redPieces: [red] });
+
+        const result = applyAction(game, { type: "split", target: [28, 7] });
+
+        expect(result.error).toBeUndefined();
+        expect(board["27,6"]!.star).toBe(true);
+        expect(board["27,6"]!.tenant).toBeNull();
     });
 });

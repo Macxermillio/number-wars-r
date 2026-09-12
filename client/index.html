@@ -167,7 +167,8 @@
             border: none !important;
             align-items: center; justify-content: center;
         }
-        .cell.brick::after { content: "🧱"; font-size: clamp(2rem, 3.5vw, 3rem); line-height: 1; opacity: 1; }
+        .cell.brick::after { content: "🧱"; font-size: clamp(2rem, 3.5vw, 3rem); line-height: 1; opacity: 1; transform: scale(1); transition: opacity 140ms ease-out, transform 180ms ease-out; }
+        .cell.brick.brick-arrival-hidden::after { opacity: 0; transform: scale(0.35); }
         .cell.shard-armor { background: #DBEAFE !important; border-color: #38B6FF !important; }
         .cell.shard-armor::after { content: "🛡️"; font-size: 0.7rem; position: absolute; bottom: 1px; right: 3px; }
         .cell.shard-spike { background: #FEF3C7 !important; border-color: #761909db !important; }
@@ -864,6 +865,8 @@
         let myPlayerId = null;
         let lastTurnEffect = null;   // detect when a new turn's effect arrives
         let lastTurnCount = null;    // detect turn transitions
+        let pendingIntent = false;
+        let pendingAnimations = 0;
 
         // Serializes board transitions so a fast opponent move never starts
         // animating before the previous move's animation has finished.
@@ -871,6 +874,15 @@
         function enqueueAnimation(task) {
             animationQueue = animationQueue.then(task).catch(() => {});
             return animationQueue;
+        }
+        function refreshBoardInputLock() {
+            const grid = document.getElementById('board-grid');
+            if (grid) grid.style.pointerEvents = (pendingIntent || pendingAnimations > 0) ? 'none' : '';
+            updateEffectButtons();
+        }
+        function setIntentPending(value) {
+            pendingIntent = value;
+            refreshBoardInputLock();
         }
 
         // Persist our seat so closing the tab / reopening the same link
@@ -1016,8 +1028,12 @@
             rejoinTimer = setTimeout(tick, 800);
         }
         function connectSocket(pendingRoomId) {
-            // Reuse the live socket when we already have one.
-            if (socket && socket.connected) return socket;
+            // Reuse an existing socket even while it is still connecting.
+            // Creating another one here duplicates every registered handler.
+            if (socket) {
+                if (!socket.connected && !socket.active) socket.connect();
+                return socket;
+            }
             // The Socket.IO client lib may still be loading (CDN slow/blocked)
             // or may have failed entirely — never throw "io is not defined".
             if (typeof io === 'undefined') {
@@ -1125,25 +1141,27 @@
             socket.on('gameState', (state) => {
                 const previousState = gameState;
                 gameState = state;
+                pendingIntent = false;
+                pendingAnimations += 1;
+                refreshBoardInputLock();
 
                 // Queue the render + animation so an opponent's instant reply
                 // waits for the current move to finish animating first.
                 enqueueAnimation(() => new Promise(resolve => {
                     renderGame(state);
                     const done = animatePieceTransition(previousState, state);
-                    if (done && typeof done.then === 'function') {
-                        done.then(() => {
-                            // The winning move has now finished animating —
-                            // only now show the win/lose overlay so the user
-                            // actually sees the final move land first.
-                            if (state.gameOver) showGameOverOverlay(state);
-                            resolve();
-                        });
-                    } else {
+                    Promise.resolve(done).catch(() => {
+                        // A visual failure must never strand the input lock.
+                    }).then(() => {
+                        // The winning move has now finished animating — only
+                        // now show the overlay so the final move lands first.
                         if (state.gameOver) showGameOverOverlay(state);
                         resolve();
-                    }
-                }));
+                    });
+                })).finally(() => {
+                    pendingAnimations = Math.max(0, pendingAnimations - 1);
+                    refreshBoardInputLock();
+                });
 
                 // Clear selection on new state (piece may have moved)
                 selection = null;
@@ -1191,6 +1209,7 @@
             });
 
             socket.on('error', (msg) => {
+                setIntentPending(false);
                 showToast(msg);
                 // Deploy race: our socket is fresh but joinRoom hasn't landed
                 // yet (or the room was still loading from Redis). Retry the
@@ -1204,6 +1223,7 @@
             });
 
             socket.on('disconnect', (reason) => {
+                setIntentPending(false);
                 showToast('Disconnected from server — reconnecting…');
                 joinedRoomId = null;
                 // Socket.IO auto-reconnects; on 'connect' we re-emit joinRoom.
@@ -1432,7 +1452,7 @@
                 }
             }
 
-            const isMyTurn = myAffiliation && state.turn === myAffiliation && !state.gameOver;
+            const isMyTurn = myAffiliation && state.turn === myAffiliation && !state.gameOver && !pendingIntent;
 
             // Turn badge lives inside the side panel (no full-width banner).
             const badge = document.getElementById('turn-badge');
@@ -1489,12 +1509,8 @@
                             pieceEl.classList.add('selected');
                         }
 
-                        // Armed effect (Split/Weaken/Strengthen): highlight every
-                        // piece as a potential target — Split only arms own
-                        // pieces, Weaken/Strengthen arm ally or enemy.
-                        const affectsAll = armedEffect && (armedEffect === 'weaken' || armedEffect === 'strengthen');
-                        const affectsOwn = armedEffect === 'split' && p.affiliation === myAffiliation;
-                        if (isMyTurn && (affectsAll || affectsOwn) && !isSelected) {
+                        // Highlight only targets the server can actually accept.
+                        if (isMyTurn && armedEffect && canUseEffectOn(armedEffect, p) && !isSelected) {
                             pieceEl.classList.add('effect-target');
                             pieceEl.style.cursor = 'pointer';
                         }
@@ -1620,13 +1636,26 @@
             const grid = document.getElementById('board-grid');
             const finalPieces = [];
             const oldPieces = [];
+            const newBrickCells = [];
             const lastEvent = next.gameHistory?.[next.gameHistory.length - 1]?.event || '';
             const isBounceResult = lastEvent.includes('repelled') || lastEvent.includes('bounced');
+            const isCaptureResult = lastEvent.includes(' captured ');
             for (const row of ROWS) for (const col of COLUMNS) {
                 const oldPiece = previous.board[`${col},${row}`]?.tenant;
                 const newPiece = next.board[`${col},${row}`]?.tenant;
                 if (oldPiece) oldPieces.push({ piece: oldPiece, col, row });
                 if (newPiece) finalPieces.push({ piece: newPiece, col, row });
+                // Bricking is a post-move stage on the server. The end-state
+                // render already contains the new brick, so hide it until the
+                // move finishes; otherwise a legal move can appear to glide
+                // through a wall that did not exist when the move was made.
+                if (!previous.board[`${col},${row}`]?.bricked && next.board[`${col},${row}`]?.bricked) {
+                    const cell = grid.querySelector(`.cell[data-col="${col}"][data-row="${row}"]`);
+                    if (cell) {
+                        cell.classList.add('brick-arrival-hidden');
+                        newBrickCells.push(cell);
+                    }
+                }
             }
 
             const movementPromises = [];
@@ -1635,7 +1664,7 @@
                 // Bounce results have a dedicated collision animation. Do
                 // not also play the ordinary source-to-final movement, or
                 // the attacker appears to take two conflicting paths.
-                if (isBounceResult) continue;
+                if (isBounceResult || isCaptureResult) continue;
                 const candidate = oldPieces
                     .filter(old => old.piece.affiliation === finalPiece.piece.affiliation
                         && (old.col !== finalPiece.col || old.row !== finalPiece.row)
@@ -1661,6 +1690,16 @@
                 const clone = finalEl.cloneNode(true);
                 clone.classList.add('movement-clone');
                 finalEl.classList.add('movement-arrival-hidden');
+                // A shard is consumed in the authoritative state as soon as
+                // the move is accepted, so the re-render above normally
+                // removes it before the moving piece reaches the square.
+                // Keep a visual copy on the destination for the duration of
+                // the flight so the pickup reads as happening on arrival.
+                const previousDestination = previous.board[`${finalPiece.col},${finalPiece.row}`];
+                const nextDestination = next.board[`${finalPiece.col},${finalPiece.row}`];
+                const pickedShard = previousDestination?.shard;
+                const preserveShard = pickedShard && !nextDestination?.shard;
+                if (preserveShard) destinationCell.classList.add(`shard-${pickedShard}`);
                 clone.style.width = `${destinationCell.clientWidth}px`;
                 clone.style.height = `${destinationCell.clientHeight}px`;
                 clone.style.left = `${destinationCell.offsetLeft}px`;
@@ -1684,6 +1723,7 @@
                     tweenTransform(clone, startX, startY, 0, 0, duration).then(() => {
                         clone.remove();
                         finalEl.classList.remove('movement-arrival-hidden');
+                        if (preserveShard) destinationCell.classList.remove(`shard-${pickedShard}`);
                     })
                 );
             }
@@ -1691,7 +1731,9 @@
             const combatPromise = animateCombatSequence(previous, next, oldPieces);
             const statPromise = animateStatChanges(previous, next);
 
-            return Promise.all([...movementPromises, combatPromise, statPromise]);
+            return Promise.all([...movementPromises, combatPromise, statPromise]).finally(() => {
+                newBrickCells.forEach(cell => cell.classList.remove('brick-arrival-hidden'));
+            });
         }
 
         function pieceDifference(a, b) {
@@ -1716,15 +1758,64 @@
         function animateCombatSequence(previous, next, oldPieces) {
             const event = next.gameHistory?.[next.gameHistory.length - 1]?.event || '';
             if (event.includes('captured')) {
-                const capturedAt = event.match(/at (\d+),(\d+)/);
-                if (capturedAt) {
-                    const cell = document.querySelector(`.cell[data-col="${capturedAt[1]}"][data-row="${capturedAt[2]}"]`);
-                    const piece = cell?.querySelector('.piece');
-                    if (piece) piece.classList.add('combat-hit');
-                }
-                // The capture hit is CSS-only; movement + stats already cover
-                // the rest. Resolve after the hit animation's duration.
-                return new Promise(resolve => setTimeout(resolve, 420));
+                // The server broadcasts the post-capture board immediately,
+                // which removes the defender and leaves the attacker at the
+                // destination. Do the whole visual attack here so neither
+                // piece disappears before the attacker arrives.
+                const fromMatch = event.match(/from (\d+),(\d+)/);
+                const atMatch = event.match(/at (\d+),(\d+)/);
+                if (!fromMatch || !atMatch) return Promise.resolve();
+                const fromCol = Number(fromMatch[1]);
+                const fromRow = Number(fromMatch[2]);
+                const destCol = Number(atMatch[1]);
+                const destRow = Number(atMatch[2]);
+                const grid = document.getElementById('board-grid');
+                const originCell = grid.querySelector(`.cell[data-col="${fromCol}"][data-row="${fromRow}"]`);
+                const destCell = grid.querySelector(`.cell[data-col="${destCol}"][data-row="${destRow}"]`);
+                const finalEl = destCell?.querySelector('.piece');
+                const oldAttacker = previous.board[`${fromCol},${fromRow}`]?.tenant;
+                const oldDefender = previous.board[`${destCol},${destRow}`]?.tenant;
+                if (!originCell || !destCell || !finalEl || !oldAttacker || !oldDefender) return Promise.resolve();
+
+                finalEl.classList.add('movement-arrival-hidden');
+                const makeClone = (piece, cell) => {
+                    const clone = document.createElement('div');
+                    clone.className = `piece ${piece.affiliation} movement-clone`;
+                    clone.innerHTML = `<div class="prow">${piece.spike > 0 ? `<span class="spike">⚡${piece.spike}</span>` : `<span></span>`}</div><div class="str"><span class="snum">${piece.strength}</span><span class="rng">${piece.range}</span></div><div class="armor">🛡️ ${piece.armor}</div>`;
+                    clone.style.width = `${cell.clientWidth}px`;
+                    clone.style.height = `${cell.clientHeight}px`;
+                    clone.style.left = `${cell.offsetLeft}px`;
+                    clone.style.top = `${cell.offsetTop}px`;
+                    return clone;
+                };
+                const attackerClone = makeClone(oldAttacker, originCell);
+                const defenderClone = makeClone(oldDefender, destCell);
+                // Keep the moving attacker above the defender at contact,
+                // matching the bounce animation. DOM insertion order used to
+                // put the defender on top, making the attacker look buried.
+                defenderClone.style.zIndex = '10';
+                attackerClone.style.zIndex = '11';
+                grid.appendChild(attackerClone);
+                grid.appendChild(defenderClone);
+                const stepW = originCell.clientWidth + 2;
+                const stepH = originCell.clientHeight + 2;
+                const distance = Math.max(Math.abs(destCol - fromCol), Math.abs(destRow - fromRow));
+                const duration = Math.min(Math.max(distance * 170, 180), 900);
+                const startX = 0;
+                const startY = 0;
+                const endX = (destCol - fromCol) * stepW;
+                const endY = (destRow - fromRow) * stepH;
+                attackerClone.style.transform = `translate(${startX}px, ${startY}px)`;
+                defenderClone.style.transform = 'translate(0px, 0px)';
+
+                return tweenTransform(attackerClone, startX, startY, endX, endY, duration).then(() => {
+                    defenderClone.classList.add('combat-hit');
+                    return new Promise(resolve => setTimeout(resolve, 420));
+                }).then(() => {
+                    attackerClone.remove();
+                    defenderClone.remove();
+                    finalEl.classList.remove('movement-arrival-hidden');
+                });
             }
             // Attacker died on spikes: slide into the defender then fade out.
             // The authoritative state has no attacker left, so build the clone
@@ -2063,8 +2154,28 @@
             return true;
         }
 
+        function canUseEffectOn(effect, piece) {
+            if (!piece) return false;
+            if (effect === 'split') {
+                if (piece.affiliation !== myAffiliation || ![2, 4, 6, 8].includes(piece.strength)) return false;
+                const [col, row] = piece.position;
+                return [[-1,-1], [0,-1], [1,-1], [-1,0], [1,0], [-1,1], [0,1], [1,1]]
+                    .some(([dc, dr]) => {
+                        const square = gameState.board[`${col + dc},${row + dr}`];
+                        return square && !square.bricked && !square.occupied && !square.tenant
+                            && !square.shard && !square.star;
+                    });
+            }
+            if (effect === 'weaken') {
+                return !(piece.strength === 1 && piece.armor === 1 && piece.range === 1);
+            }
+            if (effect === 'strengthen') return piece.strength < 8;
+            return false;
+        }
+
         function handlePieceClick(col, row, piece) {
-            if (!gameState || gameState.gameOver) return;
+            if (!gameState || gameState.gameOver || pendingIntent || pendingAnimations > 0) return;
+            if (gameState.turn !== myAffiliation) return;
             hidePieceTooltip();
 
             // Clicking the selected piece again deselects it and hides stats.
@@ -2079,10 +2190,11 @@
             // If armed effect, clicking your own piece applies the effect.
             // Split only arms your own pieces; Weaken/Strengthen arm any piece.
             if (armedEffect) {
-                if (armedEffect === 'split' && piece.affiliation !== myAffiliation) {
-                    showToast('Split only works on your own piece');
+                if (!canUseEffectOn(armedEffect, piece)) {
+                    showToast('That effect cannot be used on this piece');
                     return;
                 }
+                setIntentPending(true);
                 socket.emit('useEffect', {
                     roomId,
                     playerId: myPlayerId,
@@ -2097,7 +2209,9 @@
             // different ally piece is a merge intent — move onto the ally.
             if (selection && gameState.turnEffect === 'Merge'
                 && piece.affiliation === myAffiliation
-                && selection.piece.affiliation === myAffiliation) {
+                && selection.piece.affiliation === myAffiliation
+                && canMergeInto(selection.piece, [col, row])) {
+                setIntentPending(true);
                 socket.emit('move', {
                     roomId,
                     playerId: myPlayerId,
@@ -2116,12 +2230,19 @@
         }
 
         function handleDestinationClick(col, row) {
-            if (!gameState || gameState.gameOver) return;
+            if (!gameState || gameState.gameOver || pendingIntent || pendingAnimations > 0) return;
+            if (gameState.turn !== myAffiliation) return;
             hidePieceTooltip();
 
             // Armed effect takes priority over a move — an armed Weaken or
             // Strengthen can target an enemy (or ally) with no selection.
             if (armedEffect) {
+                const target = gameState.board[`${col},${row}`]?.tenant;
+                if (!canUseEffectOn(armedEffect, target)) {
+                    showToast('That effect cannot be used on this piece');
+                    return;
+                }
+                setIntentPending(true);
                 socket.emit('useEffect', {
                     roomId,
                     playerId: myPlayerId,
@@ -2135,7 +2256,17 @@
 
             if (!selection) return;
 
+            const destination = gameState.board[`${col},${row}`];
+            const legal = destination?.tenant
+                ? destination.tenant.affiliation !== myAffiliation && canCaptureOnto(selection.piece, [col, row])
+                : canSelectMoveTo(selection.piece, [col, row]);
+            if (!legal) {
+                showToast('That piece cannot move there');
+                return;
+            }
+
             // Send move intent
+            setIntentPending(true);
             socket.emit('move', {
                 roomId,
                 playerId: myPlayerId,
@@ -2175,7 +2306,8 @@
             const chip = document.getElementById('effect-chip');
             const hint = document.getElementById('effect-arm-hint');
             if (!s || !chip) return;
-            const usable = !s.gameOver && myAffiliation === s.turn && s.turnEffect !== 'Merge';
+            const usable = !s.gameOver && myAffiliation === s.turn && s.turnEffect !== 'Merge'
+                && !pendingIntent && pendingAnimations === 0;
             const key = (s.turnEffect || '').toLowerCase();
             const isArmed = usable && armedEffect === key;
             chip.classList.toggle('armed', isArmed);
