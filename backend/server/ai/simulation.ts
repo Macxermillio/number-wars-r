@@ -166,6 +166,7 @@ export function applyMove(state: gameState, move: Move): { error?: string; resul
 
     if (isEnemy(state, to, fromPiece.affiliation)) {
         const outcome = simulateCapture(state, fromPiece, to);
+        advanceSearchTurn(state);
         return { result: outcome };
     }
 
@@ -188,8 +189,7 @@ export function applyMove(state: gameState, move: Move): { error?: string; resul
     fromPiece.position = to;
     const side = fromPiece.affiliation === "blue" ? "Blue" : "Red";
     state.gameHistory.push({ turn: state.turnCount, event: `${side} ${fromPiece.strength} moved from ${from[0]},${from[1]} to ${to[0]},${to[1]}`, player: fromPiece.affiliation });
-    state.turnCount += 1;
-    state.turn = state.turn === "red" ? "blue" : "red";
+    advanceSearchTurn(state);
     return { result: "Piece moved successfully" };
 }
 
@@ -265,8 +265,7 @@ function simulateMerge(state: gameState, piece: Piece, target: Piece): string {
 
     const mside = piece.affiliation === "blue" ? "Blue" : "Red";
     state.gameHistory.push({ turn: state.turnCount, event: `${mside} ${piece.strength} merged with ${mside} ${target.strength} at ${target.position[0]},${target.position[1]} (merged)`, player: piece.affiliation });
-    state.turnCount += 1;
-    state.turn = state.turn === "red" ? "blue" : "red";
+    advanceSearchTurn(state);
     return "Pieces merged";
 }
 
@@ -526,7 +525,7 @@ export function applyAction(state: gameState, action: AiAction): { error?: strin
             .map(([dc, dr]) => [target.position[0] + dc, target.position[1] + dr]);
         const pos = adjacent.find(([c, r]) => {
             const sq = state.board[`${c},${r}`];
-            return sq && !sq.bricked && !sq.occupied && sq.shard === undefined;
+            return sq && !sq.bricked && !sq.occupied && sq.shard === undefined && !sq.star;
         });
         if (!pos) return { error: "No valid split square" };
         const half = { strength: target.strength / 2, armor: Math.floor(target.armor / 2), spike: Math.floor(target.spike / 2), range: Math.max(1, Math.floor(target.range / 2)) };

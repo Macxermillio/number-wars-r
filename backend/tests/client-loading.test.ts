@@ -55,3 +55,78 @@ describe("client socket.io loading (io-is-not-defined regression)", () => {
         expect(html).toMatch(/function joinByCode[\s\S]*?const s = connectSocket\(code\)[\s\S]*?if \(!s\) return;/);
     });
 });
+
+describe("client movement graphics regressions", () => {
+    it("keeps a collected shard visible until the moving piece arrives", () => {
+        const html = loadIndexHtml();
+        expect(html).toMatch(/const pickedShard = previousDestination\?\.shard/);
+        expect(html).toMatch(/destinationCell\.classList\.add\(`shard-\$\{pickedShard\}`\)/);
+        expect(html).toMatch(/tweenTransform\(clone,[\s\S]*?finalEl\.classList\.remove\('movement-arrival-hidden'\)[\s\S]*?destinationCell\.classList\.remove\(`shard-\$\{pickedShard\}`\)/);
+    });
+
+    it("animates captures before revealing the authoritative attacker", () => {
+        const html = loadIndexHtml();
+        const captureStart = html.indexOf("if (event.includes('captured'))");
+        const captureEnd = html.indexOf("// Attacker died on spikes", captureStart);
+        expect(captureStart).toBeGreaterThanOrEqual(0);
+        expect(captureEnd).toBeGreaterThan(captureStart);
+        const capture = html.slice(captureStart, captureEnd);
+        expect(capture).toMatch(/finalEl\.classList\.add\('movement-arrival-hidden'\)/);
+        expect(capture).toMatch(/tweenTransform\(attackerClone/);
+        expect(capture).toMatch(/defenderClone\.classList\.add\('combat-hit'\)/);
+        expect(capture).toMatch(/finalEl\.classList\.remove\('movement-arrival-hidden'\)/);
+        expect(html).toMatch(/const isCaptureResult = lastEvent\.includes\(' captured '\)/);
+        expect(html).toMatch(/if \(isBounceResult \|\| isCaptureResult\) continue;/);
+    });
+
+    it("does not inherit hidden-arrival state in bounce and spike-death clones", () => {
+        const html = loadIndexHtml();
+        const spikeStart = html.indexOf("if (event.includes('died to spikes'))");
+        const bounceStart = html.indexOf("if (!event.includes('repelled')", spikeStart);
+        const bounceEnd = html.indexOf("// Keep the authoritative final piece", bounceStart);
+        expect(bounceStart).toBeGreaterThanOrEqual(0);
+        expect(bounceEnd).toBeGreaterThan(bounceStart);
+        const spike = html.slice(spikeStart, bounceStart);
+        expect(spike).toMatch(/document\.createElement\('div'\)/);
+        expect(spike).not.toMatch(/cloneNode\s*\(/);
+        const bounce = html.slice(bounceStart, bounceEnd);
+        expect(bounce).toMatch(/const clone = document\.createElement\('div'\)/);
+        expect(bounce).not.toMatch(/cloneNode\s*\(/);
+    });
+
+    it("reveals a newly spawned brick only after the move animation finishes", () => {
+        const html = loadIndexHtml();
+        expect(html).toMatch(/if \(!previous\.board\[`\$\{col\},\$\{row\}`\]\?\.bricked && next\.board\[`\$\{col\},\$\{row\}`\]\?\.bricked\)/);
+        expect(html).toMatch(/cell\.classList\.add\('brick-arrival-hidden'\)/);
+        expect(html).toMatch(/Promise\.all\(\[\.\.\.movementPromises, combatPromise, statPromise\]\)\.finally[\s\S]*?cell\.classList\.remove\('brick-arrival-hidden'\)/);
+    });
+
+    it("reuses a socket that is already connecting", () => {
+        const html = loadIndexHtml();
+        const connectStart = html.indexOf("function connectSocket");
+        const socketCreation = html.indexOf("socket = io(", connectStart);
+        const reuse = html.indexOf("if (socket) {", connectStart);
+        expect(reuse).toBeGreaterThan(connectStart);
+        expect(reuse).toBeLessThan(socketCreation);
+        expect(html.slice(reuse, socketCreation)).toMatch(/return socket/);
+    });
+
+    it("locks input while an intent or animation is pending", () => {
+        const html = loadIndexHtml();
+        expect(html).toMatch(/grid\.style\.pointerEvents = \(pendingIntent \|\| pendingAnimations > 0\) \? 'none' : ''/);
+        expect(html).toMatch(/function handlePieceClick[\s\S]*?pendingIntent \|\| pendingAnimations > 0/);
+        expect(html).toMatch(/function handleDestinationClick[\s\S]*?setIntentPending\(true\)[\s\S]*?socket\.emit\('move'/);
+        expect(html).toMatch(/socket\.on\('error'[\s\S]*?setIntentPending\(false\)/);
+        expect(html).toMatch(/socket\.on\('disconnect'[\s\S]*?setIntentPending\(false\)/);
+        expect(html).toMatch(/Promise\.resolve\(done\)\.catch[\s\S]*?resolve\(\)/);
+    });
+
+    it("validates moves, merges, and effects before emitting them", () => {
+        const html = loadIndexHtml();
+        expect(html).toMatch(/function canUseEffectOn\(effect, piece\)/);
+        expect(html).toMatch(/canMergeInto\(selection\.piece, \[col, row\]\)/);
+        expect(html).toMatch(/canCaptureOnto\(selection\.piece, \[col, row\]\)/);
+        expect(html).toMatch(/canSelectMoveTo\(selection\.piece, \[col, row\]\)/);
+        expect(html).toMatch(/!square\.shard && !square\.star/);
+    });
+});
