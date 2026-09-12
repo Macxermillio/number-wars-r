@@ -1790,6 +1790,11 @@
                 };
                 const attackerClone = makeClone(oldAttacker, originCell);
                 const defenderClone = makeClone(oldDefender, destCell);
+                // Keep the moving attacker above the defender at contact,
+                // matching the bounce animation. DOM insertion order used to
+                // put the defender on top, making the attacker look buried.
+                defenderClone.style.zIndex = '10';
+                attackerClone.style.zIndex = '11';
                 grid.appendChild(attackerClone);
                 grid.appendChild(defenderClone);
                 const stepW = originCell.clientWidth + 2;

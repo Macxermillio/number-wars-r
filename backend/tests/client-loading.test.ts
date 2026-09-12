@@ -74,6 +74,7 @@ describe("client movement graphics regressions", () => {
         expect(capture).toMatch(/finalEl\.classList\.add\('movement-arrival-hidden'\)/);
         expect(capture).toMatch(/tweenTransform\(attackerClone/);
         expect(capture).toMatch(/defenderClone\.classList\.add\('combat-hit'\)/);
+        expect(capture).toMatch(/defenderClone\.style\.zIndex = '10'[\s\S]*?attackerClone\.style\.zIndex = '11'/);
         expect(capture).toMatch(/finalEl\.classList\.remove\('movement-arrival-hidden'\)/);
         expect(html).toMatch(/const isCaptureResult = lastEvent\.includes\(' captured '\)/);
         expect(html).toMatch(/if \(isBounceResult \|\| isCaptureResult\) continue;/);
