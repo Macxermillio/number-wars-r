@@ -1083,6 +1083,7 @@
             });
 
             socket.on('roomCreated', (data) => {
+                showLanding(false);
                 roomId = data.roomId;
                 setRoomUrl(roomId);
                 joinedRoomId = roomId;
@@ -1117,6 +1118,7 @@
             });
 
             socket.on('roomJoined', (data) => {
+                showLanding(false);
                 roomId = data.roomId;
                 setRoomUrl(roomId);
                 joinedRoomId = roomId;
@@ -1182,6 +1184,8 @@
             socket.on('opponentJoined', () => {
                 // Bot opponents are always present — never overwrite their label.
                 if (gameMode === 'ai' || gameMode === 'computer') return;
+                // Red is the joiner — only blue (host) should see this notice.
+                if (myAffiliation === 'red') return;
                 setOpponentStatus('Opponent connected', 'connected');
                 if (gameMode === 'friend') {
                     document.getElementById('copy-link').style.display = 'none';
