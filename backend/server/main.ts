@@ -736,15 +736,14 @@ io.on("connection", (socket) => {
                     playerId: slot.playerId,
                 });
                 if (isNewSeat) {
-                    socket.emit("opponentJoined");
+                    // Only notify players already in the room — not the joiner.
                     socket.to(roomId).emit("opponentJoined");
                 } else {
                     // Returning player: let the opponent know we're back.
-                    io.to(roomId).emit("opponentReconnected", {
+                    socket.to(roomId).emit("opponentReconnected", {
                         affiliation: slot.affiliation,
                         playerId: slot.playerId,
                     });
-                    io.to(roomId).emit("opponentJoined");
                     console.log(`[room] ${slot.playerId} reconnected to ${roomId} as ${slot.affiliation}`);
                 }
             };
@@ -805,8 +804,8 @@ io.on("connection", (socket) => {
             socket.emit("gameState", room.state);
             socket.emit("roomJoined", { roomId: room.roomId, mode: room.mode, affiliation: "red", playerId: newPlayerId });
 
-            // Notify host
-            io.to(roomId).emit("opponentJoined");
+            // Notify host only — the joiner must not receive opponentJoined.
+            socket.to(roomId).emit("opponentJoined");
 
             console.log(`[room] ${newPlayerId} joined ${roomId}`);
 
@@ -1074,8 +1073,8 @@ io.on("connection", (socket) => {
 
 // ==================== Start server ====================
 
-httpServer.listen(PORT, async () => {
-    console.log(`[server] Number Wars running on http://localhost:${PORT}`);
+async function onServerReady(port: number) {
+    console.log(`[server] Number Wars running on http://localhost:${port}`);
     console.log(`[server] LLM_API_KEY set: ${!!process.env.LLM_API_KEY}`);
     console.log(`[server] Redis persistence: ${isRedisEnabled() ? "enabled" : "disabled (memory-only)"}`);
 
@@ -1117,6 +1116,14 @@ httpServer.listen(PORT, async () => {
             console.error("[redis] boot recovery failed:", err.message);
         }
     }
-});
+}
 
-export { app, httpServer, io };
+// Vitest imports this module to exercise joinRoom over real sockets — do not
+// bind the production port during test runs.
+if (process.env.VITEST !== "true") {
+    httpServer.listen(PORT, () => {
+        void onServerReady(PORT);
+    });
+}
+
+export { app, httpServer, io, onServerReady };
