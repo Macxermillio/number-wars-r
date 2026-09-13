@@ -1204,12 +1204,12 @@
 
             socket.on('playerDisconnected', () => {
                 if (gameMode === 'ai' || gameMode === 'computer') return;
-                setOpponentStatus('⚠ Opponent disconnected', 'disconnected');
+                setOpponentStatus('Opponent disconnected', 'disconnected');
             });
 
             socket.on('opponentDisconnected', () => {
                 if (gameMode === 'ai' || gameMode === 'computer') return;
-                setOpponentStatus('⚠ Opponent disconnected', 'disconnected');
+                setOpponentStatus('Opponent disconnected', 'disconnected');
             });
 
             socket.on('error', (msg) => {
