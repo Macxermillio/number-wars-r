@@ -307,7 +307,7 @@ function scheduleOpponentNotice(room: Room, slot: PlayerSlot) {
         if (!current) return;
         const currentSlot = current.players.find(p => p.playerId === slot.playerId);
         if (!currentSlot || currentSlot.connected) return;
-        const payload = { affiliation: currentSlot.affiliation, playerId: currentSlot.playerId };
+        const payload = { affiliation: currentSlot.affiliation };
         // `playerDisconnected` is the legacy event; `opponentDisconnected`
         // is the new explicit one. Emit both for backwards compatibility.
         io.to(room.roomId).emit("playerDisconnected", payload);
@@ -327,19 +327,14 @@ function attachSocketToSlot(room: Room, slot: PlayerSlot, socket: any) {
     cancelDisconnectNotice(room.roomId, slot.playerId);
 }
 
-// A move can arrive during the small window between Socket.IO reconnecting
-// and the client's automatic joinRoom acknowledgement. Since the playerId is
-// durable, repair the socket membership at the intent boundary instead of
-// rejecting a valid player with "You are not in this room".
-function reattachSocketIfKnown(room: Room, playerId: string, socket: any): PlayerSlot | null {
+// Gameplay commands are authorized by the socket that joined the seat.
+// Never repair/reassign a seat from an action payload: otherwise a client
+// that learns another player's id can submit commands as that player.
+function getSocketOwnedSlot(room: Room, socket: any): PlayerSlot | null {
+    const playerId = socket.data?.playerId;
+    if (!playerId || !socket.rooms.has(room.roomId)) return null;
     const slot = room.players.find(p => p.playerId === playerId);
-    if (!slot || isBotSlot(slot)) return null;
-    if (slot.socketId !== socket.id || !slot.connected) {
-        attachSocketToSlot(room, slot, socket);
-        persist(room);
-    } else if (!socket.rooms.has(room.roomId)) {
-        socket.join(room.roomId);
-    }
+    if (!slot || isBotSlot(slot) || !slot.connected || slot.socketId !== socket.id) return null;
     return slot;
 }
 //Need
@@ -742,7 +737,6 @@ io.on("connection", (socket) => {
                     // Returning player: let the opponent know we're back.
                     socket.to(roomId).emit("opponentReconnected", {
                         affiliation: slot.affiliation,
-                        playerId: slot.playerId,
                     });
                     console.log(`[room] ${slot.playerId} reconnected to ${roomId} as ${slot.affiliation}`);
                 }
@@ -818,7 +812,7 @@ io.on("connection", (socket) => {
     });
 
     // --- Move ---
-    socket.on("move", async ({ roomId, playerId: claimedPlayerId, destination, fromPosition }: { roomId: string; playerId?: string; destination: [number, number]; fromPosition?: [number, number] }) => {
+    socket.on("move", async ({ roomId, destination, fromPosition }: { roomId: string; destination: [number, number]; fromPosition?: [number, number] }) => {
         try {
             const room = await fetchRoom(roomId);
             if (!room) {
@@ -832,12 +826,12 @@ io.on("connection", (socket) => {
                 return;
             }
 
-            const playerId = claimedPlayerId || socket.data.playerId || getPlayerId(socket) || "";
-            const slot = reattachSocketIfKnown(room, playerId, socket);
+            const slot = getSocketOwnedSlot(room, socket);
             if (!slot) {
                 socket.emit("error", "You are not in this room");
                 return;
             }
+            const playerId = slot.playerId;
 
             // Gate: is it this player's turn?
             if (state.turn !== slot.affiliation) {
@@ -907,7 +901,7 @@ io.on("connection", (socket) => {
     });
 
     // --- Use Effect ---
-    socket.on("useEffect", async ({ roomId, playerId: claimedPlayerId, effect, targetPosition }: { roomId: string; playerId?: string; effect: string; targetPosition: [number, number] }) => {
+    socket.on("useEffect", async ({ roomId, effect, targetPosition }: { roomId: string; effect: string; targetPosition: [number, number] }) => {
         try {
             const room = await fetchRoom(roomId);
             if (!room) {
@@ -921,12 +915,12 @@ io.on("connection", (socket) => {
                 return;
             }
 
-            const playerId = claimedPlayerId || socket.data.playerId || getPlayerId(socket) || "";
-            const slot = reattachSocketIfKnown(room, playerId, socket);
+            const slot = getSocketOwnedSlot(room, socket);
             if (!slot) {
                 socket.emit("error", "You are not in this room");
                 return;
             }
+            const playerId = slot.playerId;
 
             if (state.turn !== slot.affiliation) {
                 socket.emit("error", "Not your turn");
@@ -981,11 +975,12 @@ io.on("connection", (socket) => {
                 socket.emit("error", "Game is still in progress");
                 return;
             }
-            const playerId = socket.data.playerId || getPlayerId(socket);
-            if (!room.players.some(p => p.playerId === playerId)) {
+            const slot = getSocketOwnedSlot(room, socket);
+            if (!slot) {
                 socket.emit("error", "You are not in this room");
                 return;
             }
+            const playerId = slot.playerId;
             const fresh = startGame();
             fresh.turnEffect = chooseTurnEffect();
             room.state = fresh as unknown as typeof room.state;
@@ -1007,16 +1002,16 @@ io.on("connection", (socket) => {
         try {
             const room = await fetchRoom(roomId);
             if (!room) return;
-            const playerId = socket.data.playerId || getPlayerId(socket);
-            const slot = room.players.find(p => p.playerId === playerId);
+            const slot = getSocketOwnedSlot(room, socket);
             socket.leave(roomId);
-            if (!slot || isBotSlot(slot)) return;
+            if (!slot) return;
+            const playerId = slot.playerId;
             slot.connected = false;
             slot.socketId = null;
             (slot as any).disconnectedAt = Date.now();
             cancelDisconnectNotice(roomId, slot.playerId);
             if (room.mode !== "ai" && room.mode !== "computer") {
-                const payload = { affiliation: slot.affiliation, playerId: slot.playerId };
+                const payload = { affiliation: slot.affiliation };
                 socket.to(roomId).emit("playerDisconnected", payload);
                 socket.to(roomId).emit("opponentDisconnected", payload);
             }

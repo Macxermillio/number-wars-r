@@ -21,9 +21,24 @@ import path from "node:path";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // tests/ lives in backend/tests → client/index.html is ../../client/index.html
 const INDEX_HTML = path.resolve(__dirname, "..", "..", "client", "index.html");
+const CLIENT_DIR = path.dirname(INDEX_HTML);
+const CLIENT_SCRIPT_PATHS = [
+    "js/state.js",
+    "js/ui.js",
+    "js/render.js",
+    "js/interactions.js",
+    "js/socket.js",
+    "js/main.js",
+] as const;
 
 function loadIndexHtml(): string {
     return readFileSync(INDEX_HTML, "utf8");
+}
+
+function loadClientSource(): string {
+    return CLIENT_SCRIPT_PATHS
+        .map(file => readFileSync(path.join(CLIENT_DIR, file), "utf8"))
+        .join("\n");
 }
 
 describe("client socket.io loading (io-is-not-defined regression)", () => {
@@ -35,12 +50,12 @@ describe("client socket.io loading (io-is-not-defined regression)", () => {
     });
 
     it("connectSocket() guards against `io` being undefined and returns null", () => {
-        const html = loadIndexHtml();
-        expect(html).toMatch(/typeof io === ['"]undefined['"]/);
+        const client = loadClientSource();
+        expect(client).toMatch(/typeof io === ['"]undefined['"]/);
         // The guard must bail out (return null) before reaching `io(`.
-        const guardIdx = html.search(/typeof io === ['"]undefined['"]/);
-        const ioCallIdx = html.indexOf("socket = io(", guardIdx);
-        const returnNullIdx = html.indexOf("return null", guardIdx);
+        const guardIdx = client.search(/typeof io === ['"]undefined['"]/);
+        const ioCallIdx = client.indexOf("socket = io(", guardIdx);
+        const returnNullIdx = client.indexOf("return null", guardIdx);
         expect(guardIdx).toBeGreaterThanOrEqual(0);
         expect(ioCallIdx).toBeGreaterThan(guardIdx);
         expect(returnNullIdx).toBeGreaterThan(guardIdx);
@@ -48,7 +63,7 @@ describe("client socket.io loading (io-is-not-defined regression)", () => {
     });
 
     it("createRoom() and joinByCode() handle a null socket instead of throwing", () => {
-        const html = loadIndexHtml();
+        const html = loadClientSource();
         // createRoom: `const s = connectSocket(null); ... if (!s) return;`
         expect(html).toMatch(/function createRoom[\s\S]*?const s = connectSocket\(null\)[\s\S]*?if \(!s\) return;/);
         // joinByCode: `const s = connectSocket(code); ... if (!s) return;`
@@ -56,16 +71,38 @@ describe("client socket.io loading (io-is-not-defined regression)", () => {
     });
 });
 
+describe("client asset loading", () => {
+    it("references the extracted stylesheet and classic scripts in order", () => {
+        const html = loadIndexHtml();
+        expect(html).toContain('<link rel="stylesheet" href="/css/game.css" />');
+
+        let previousIndex = -1;
+        for (const scriptPath of CLIENT_SCRIPT_PATHS) {
+            const tag = `<script src="/${scriptPath}"></script>`;
+            const index = html.indexOf(tag);
+            expect(index).toBeGreaterThan(previousIndex);
+            previousIndex = index;
+        }
+    });
+
+    it("keeps only the Socket.IO fallback and Tailwind config inline", () => {
+        const html = loadIndexHtml();
+        expect(html.match(/<style(?:\s[^>]*)?>/g) ?? []).toHaveLength(0);
+        expect(html.match(/<script>([\s\S]*?)<\/script>/g) ?? []).toHaveLength(2);
+        expect(html).not.toContain("Number Wars client loaded");
+    });
+});
+
 describe("client movement graphics regressions", () => {
     it("keeps a collected shard visible until the moving piece arrives", () => {
-        const html = loadIndexHtml();
+        const html = loadClientSource();
         expect(html).toMatch(/const pickedShard = previousDestination\?\.shard/);
         expect(html).toMatch(/destinationCell\.classList\.add\(`shard-\$\{pickedShard\}`\)/);
         expect(html).toMatch(/tweenTransform\(clone,[\s\S]*?finalEl\.classList\.remove\('movement-arrival-hidden'\)[\s\S]*?destinationCell\.classList\.remove\(`shard-\$\{pickedShard\}`\)/);
     });
 
     it("animates captures before revealing the authoritative attacker", () => {
-        const html = loadIndexHtml();
+        const html = loadClientSource();
         const captureStart = html.indexOf("if (event.includes('captured'))");
         const captureEnd = html.indexOf("// Attacker died on spikes", captureStart);
         expect(captureStart).toBeGreaterThanOrEqual(0);
@@ -81,7 +118,7 @@ describe("client movement graphics regressions", () => {
     });
 
     it("does not inherit hidden-arrival state in bounce and spike-death clones", () => {
-        const html = loadIndexHtml();
+        const html = loadClientSource();
         const spikeStart = html.indexOf("if (event.includes('died to spikes'))");
         const bounceStart = html.indexOf("if (!event.includes('repelled')", spikeStart);
         const bounceEnd = html.indexOf("// Keep the authoritative final piece", bounceStart);
@@ -96,14 +133,14 @@ describe("client movement graphics regressions", () => {
     });
 
     it("reveals a newly spawned brick only after the move animation finishes", () => {
-        const html = loadIndexHtml();
+        const html = loadClientSource();
         expect(html).toMatch(/if \(!previous\.board\[`\$\{col\},\$\{row\}`\]\?\.bricked && next\.board\[`\$\{col\},\$\{row\}`\]\?\.bricked\)/);
         expect(html).toMatch(/cell\.classList\.add\('brick-arrival-hidden'\)/);
         expect(html).toMatch(/Promise\.all\(\[\.\.\.movementPromises, combatPromise, statPromise\]\)\.finally[\s\S]*?cell\.classList\.remove\('brick-arrival-hidden'\)/);
     });
 
     it("reuses a socket that is already connecting", () => {
-        const html = loadIndexHtml();
+        const html = loadClientSource();
         const connectStart = html.indexOf("function connectSocket");
         const socketCreation = html.indexOf("socket = io(", connectStart);
         const reuse = html.indexOf("if (socket) {", connectStart);
@@ -113,7 +150,7 @@ describe("client movement graphics regressions", () => {
     });
 
     it("locks input while an intent or animation is pending", () => {
-        const html = loadIndexHtml();
+        const html = loadClientSource();
         expect(html).toMatch(/grid\.style\.pointerEvents = \(pendingIntent \|\| pendingAnimations > 0\) \? 'none' : ''/);
         expect(html).toMatch(/function handlePieceClick[\s\S]*?pendingIntent \|\| pendingAnimations > 0/);
         expect(html).toMatch(/function handleDestinationClick[\s\S]*?setIntentPending\(true\)[\s\S]*?socket\.emit\('move'/);
@@ -123,11 +160,20 @@ describe("client movement graphics regressions", () => {
     });
 
     it("validates moves, merges, and effects before emitting them", () => {
-        const html = loadIndexHtml();
+        const html = loadClientSource();
         expect(html).toMatch(/function canUseEffectOn\(effect, piece\)/);
         expect(html).toMatch(/canMergeInto\(selection\.piece, \[col, row\]\)/);
         expect(html).toMatch(/canCaptureOnto\(selection\.piece, \[col, row\]\)/);
         expect(html).toMatch(/canSelectMoveTo\(selection\.piece, \[col, row\]\)/);
         expect(html).toMatch(/!square\.shard && !square\.star/);
+    });
+
+    it("does not put the client-controlled playerId in gameplay commands", () => {
+        const html = loadClientSource();
+        const commands = [...html.matchAll(/socket\.emit\('(move|useEffect)',\s*\{([\s\S]*?)\}\);/g)];
+        expect(commands.length).toBeGreaterThan(0);
+        for (const command of commands) {
+            expect(command[2]).not.toMatch(/\bplayerId\s*:/);
+        }
     });
 });

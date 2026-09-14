@@ -66,9 +66,9 @@ export interface ClientToServerEvents {
 
 export interface ServerToClientEvents {
     gameState: (state: unknown) => void;
-    playerDisconnected: (data?: { affiliation?: Affiliation; playerId?: string }) => void;
-    opponentDisconnected: (data?: { affiliation?: Affiliation; playerId?: string }) => void;
-    opponentReconnected: (data?: { affiliation?: Affiliation; playerId?: string }) => void;
+    playerDisconnected: (data?: { affiliation?: Affiliation }) => void;
+    opponentDisconnected: (data?: { affiliation?: Affiliation }) => void;
+    opponentReconnected: (data?: { affiliation?: Affiliation }) => void;
     opponentJoined: () => void;
     error: (msg: string) => void;
     roomCreated: (data: { roomId: string; link: string; mode?: GameMode; difficulty?: string; playerId: string; affiliation: Affiliation }) => void;

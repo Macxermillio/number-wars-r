@@ -17,9 +17,20 @@ import { httpServer } from "../server/main.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const INDEX_HTML = path.resolve(__dirname, "..", "..", "client", "index.html");
+const CLIENT_SCRIPT_PATHS = [
+    "js/state.js",
+    "js/ui.js",
+    "js/render.js",
+    "js/interactions.js",
+    "js/socket.js",
+    "js/main.js",
+] as const;
 
-function loadIndexHtml(): string {
-    return readFileSync(INDEX_HTML, "utf8");
+function loadClientSource(): string {
+    const clientDir = path.dirname(INDEX_HTML);
+    return CLIENT_SCRIPT_PATHS
+        .map(file => readFileSync(path.join(clientDir, file), "utf8"))
+        .join("\n");
 }
 
 function waitForConnect(client: Socket): Promise<void> {
@@ -116,6 +127,29 @@ describe("joinRoom invite-link regressions (server)", () => {
         hostOpponentJoined.stop();
     });
 
+    it("does not let an unjoined socket act as a player by claiming its playerId", async () => {
+        const host = connectClient(port);
+        clients.push(host);
+        await waitForConnect(host);
+
+        host.emit("createRoom", { mode: "friend" });
+        const created = await waitForEvent<{ roomId: string; playerId: string }>(host, "roomCreated");
+
+        const attacker = connectClient(port);
+        clients.push(attacker);
+        await waitForConnect(attacker);
+
+        attacker.emit("move", {
+            roomId: created.roomId,
+            playerId: created.playerId,
+            fromPosition: [999, 999],
+            destination: [999, 998],
+        });
+
+        const error = await waitForEvent<string>(attacker, "error");
+        expect(error).toBe("You are not in this room");
+    });
+
     it("reconnecting guest gets roomJoined but not opponentJoined", async () => {
         const host = connectClient(port);
         clients.push(host);
@@ -141,11 +175,13 @@ describe("joinRoom invite-link regressions (server)", () => {
 
         const guestOpponentJoined = trackEvent(rejoin, "opponentJoined");
         const hostOpponentReconnected = trackEvent(host, "opponentReconnected");
+        const reconnectedPayload = waitForEvent<{ affiliation: string; playerId?: string }>(host, "opponentReconnected");
 
         rejoin.emit("joinRoom", { roomId: created.roomId, playerId: firstJoin.playerId });
         const rejoined = await waitForEvent<{ affiliation: string }>(rejoin, "roomJoined");
         expect(rejoined.affiliation).toBe("red");
 
+        expect(await reconnectedPayload).toEqual({ affiliation: "red" });
         await new Promise((r) => setTimeout(r, 150));
 
         expect(guestOpponentJoined.getCount()).toBe(0);
@@ -158,13 +194,13 @@ describe("joinRoom invite-link regressions (server)", () => {
 
 describe("joinRoom invite-link regressions (client handlers)", () => {
     it("roomJoined and roomCreated hide the landing page when join succeeds", () => {
-        const html = loadIndexHtml();
+        const html = loadClientSource();
         expect(html).toMatch(/socket\.on\('roomJoined',[\s\S]*?showLanding\(false\)/);
         expect(html).toMatch(/socket\.on\('roomCreated',[\s\S]*?showLanding\(false\)/);
     });
 
     it("opponentJoined handler ignores the red-side joiner", () => {
-        const html = loadIndexHtml();
+        const html = loadClientSource();
         const start = html.indexOf("socket.on('opponentJoined'");
         expect(start).toBeGreaterThanOrEqual(0);
         const end = html.indexOf("});", start);
